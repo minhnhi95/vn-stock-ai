@@ -1,0 +1,14 @@
+# Railway nixpacks config: pin Python 3.11 + build / start commands.
+# Procfile cũng được Railway respect, nhưng nixpacks.toml chính xác hơn cho Python version.
+
+[phases.setup]
+nixPkgs = ["python311", "gcc"]
+
+[phases.install]
+cmds = ["python -m venv /opt/venv", ". /opt/venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt"]
+
+[phases.build]
+cmds = ["echo 'No build step for FastAPI'"]
+
+[start]
+cmd = ". /opt/venv/bin/activate && gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 60"

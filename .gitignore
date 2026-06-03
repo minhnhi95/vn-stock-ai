@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Env files
+.env
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# Local DB
+backend/data.db
+backend/data.db-journal
+backend/data.db-wal
+backend/data.db-shm
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Vite/Build outputs
+dist/
+build/
+frontend/dist/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

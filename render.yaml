@@ -1,0 +1,26 @@
+# Render Blueprint cho backend FastAPI.
+# ALTERNATIVE deploy option. Project mặc định deploy lên Railway (xem DEPLOY.md).
+# Dùng file này nếu muốn chuyển sang Render free:
+#   dashboard.render.com → New → Blueprint → connect repo.
+# Sau khi tạo, vào dashboard Render → Environment → thêm DATABASE_URL từ Neon.
+services:
+  - type: web
+    name: vn-stock-ai-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    region: singapore  # gần Vietnam nhất; có thể đổi sang oregon/frankfurt
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 60
+    healthCheckPath: /api/market/status
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        sync: false   # nhập thủ công trong dashboard từ Neon connection string
+      - key: GEMINI_API_KEY
+        sync: false   # optional - user có thể nhập key qua UI
+      - key: CORS_ORIGINS
+        sync: false   # comma-separated list, vd: https://your-app.vercel.app
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
