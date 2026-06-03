@@ -45,7 +45,11 @@ HEATMAP_TTL_SECONDS = 1800.0
 MAX_WORKERS = 3
 
 # Số mã tối đa lấy mỗi ngành — giảm xuống để tổng số call < 20 với 4-6 ngành chính.
-MAX_SYMBOLS_PER_SECTOR = 5
+MAX_SYMBOLS_PER_SECTOR = 3
+
+# Tổng số ngành tối đa — chỉ tính top N ngành theo số mã (skip ngành nhỏ).
+# 8 ngành × 3 mã = 24 calls → vừa khít 20 req/min window (sẽ pause sau 20 calls).
+MAX_INDUSTRIES = 8
 
 # Fallback VN30 — đồng bộ với backtest_service.VN30_SYMBOLS để UI nhất quán.
 _FALLBACK_VN30 = [
@@ -407,6 +411,10 @@ def get_sector_heatmap() -> Dict[str, Any]:
             "reason": "Không lấy được danh sách ngành ICB từ vnstock",
             "sectors": [],
         }
+
+    # Limit số ngành để vừa với vnstock rate limit (20 req/min).
+    # Sort theo số mã desc và pick top MAX_INDUSTRIES.
+    industries = sorted(industries, key=lambda x: len(x.get("symbols", [])), reverse=True)[:MAX_INDUSTRIES]
 
     # Gom tất cả mã cần fetch thành 1 set để tránh fetch trùng giữa các ngành
     # (1 mã chỉ thuộc 1 ngành ICB cấp 2 trong thực tế, nhưng dữ liệu đôi khi
