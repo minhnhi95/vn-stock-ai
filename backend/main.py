@@ -1,5 +1,10 @@
 import os
 from dotenv import load_dotenv
+
+# CRITICAL: patch vnstock TRƯỚC khi bất kỳ service nào import vnstock.
+# vnstock free tier 20 req/min → khi limit hit, thư viện sys.exit() giết worker.
+import vnstock_safe  # noqa: F401 - side effect import
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -498,6 +503,13 @@ if _FOREIGN_OK:
 
 
 # ---- Sector heatmap + VN100 ----
+# Hardcoded VN30 fallback nếu vnstock rate-limit
+_VN30_FALLBACK = [
+    "ACB", "BCM", "BID", "BVH", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG",
+    "MBB", "MSN", "MWG", "PLX", "POW", "SAB", "SHB", "SSB", "SSI", "STB",
+    "TCB", "TPB", "VCB", "VHM", "VIB", "VIC", "VJC", "VNM", "VPB", "VRE",
+]
+
 if _SECTOR_OK:
     @app.get("/api/sectors/heatmap")
     def api_sector_heatmap():
@@ -505,8 +517,9 @@ if _SECTOR_OK:
             return get_sector_heatmap()
         except HTTPException:
             raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Lỗi heatmap ngành: {str(e)}")
+        except (SystemExit, Exception) as e:
+            # vnstock rate limit hoặc lỗi network - trả empty thay vì 500
+            return {"available": False, "reason": f"Tạm thời không lấy được dữ liệu ngành: {str(e)[:120]}", "sectors": []}
 
     @app.get("/api/vn100")
     def api_vn100():
@@ -514,8 +527,8 @@ if _SECTOR_OK:
             return {"symbols": get_vn100_symbols()}
         except HTTPException:
             raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Lỗi lấy VN100: {str(e)}")
+        except (SystemExit, Exception):
+            return {"symbols": _VN30_FALLBACK, "fallback": True}
 
 
 # ---- Scanner ----
@@ -640,11 +653,11 @@ if _CALENDAR_OK:
             events: List[Dict] = []
             try:
                 dividends = get_dividend_calendar(sym_list, days_ahead=days_ahead) or []
-            except Exception as de:
+            except (SystemExit, Exception) as de:
                 print(f"[calendar] dividend fetch failed: {de}")
             try:
                 events = get_upcoming_events(sym_list, days_ahead=max(days_ahead, 60)) or []
-            except Exception as ee:
+            except (SystemExit, Exception) as ee:
                 print(f"[calendar] events fetch failed: {ee}")
 
             return {
@@ -654,8 +667,8 @@ if _CALENDAR_OK:
             }
         except HTTPException:
             raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Lỗi lịch sự kiện: {str(e)}")
+        except (SystemExit, Exception) as e:
+            return {"symbols": [], "dividends": [], "events": [], "error": str(e)[:120]}
 
 
 # ---- Insider deals ----
@@ -675,8 +688,8 @@ if _INSIDER_OK:
                 return {"symbol": symbol, "days": days, "deals": get_insider_deals(symbol)}  # type: ignore[call-arg]
         except HTTPException:
             raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Lỗi giao dịch nội bộ: {str(e)}")
+        except (SystemExit, Exception) as e:
+            return {"symbol": symbol, "days": days, "deals": [], "error": str(e)[:120]}
 
 
 # ---- Portfolio review ----
