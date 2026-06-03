@@ -29,6 +29,8 @@ _initialized = False
 
 # --- Postgres pool (chỉ khởi tạo khi cần) ---
 _pg_pool = None
+_pool_opened = False
+_pool_open_lock = threading.Lock()
 if USE_POSTGRES:
     try:
         from psycopg_pool import ConnectionPool
@@ -49,9 +51,14 @@ if USE_POSTGRES:
 @contextmanager
 def _conn():
     """Yield connection (sqlite3.Connection hoặc psycopg.Connection)."""
+    global _pool_opened
     if USE_POSTGRES:
-        if not _pg_pool.closed and not _pg_pool._opened:  # lazy open
-            _pg_pool.open()
+        # Open pool 1 lần duy nhất (thread-safe).
+        if not _pool_opened:
+            with _pool_open_lock:
+                if not _pool_opened:
+                    _pg_pool.open(wait=True, timeout=30)
+                    _pool_opened = True
         with _pg_pool.connection() as con:
             yield con
     else:
