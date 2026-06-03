@@ -36,14 +36,16 @@ except ImportError:
 
 # Cache TTL: rổ chỉ số / danh sách ngành ít đổi → 24h là hợp lý.
 LISTING_TTL_SECONDS = 24 * 3600.0
-# Heatmap đổi theo phiên — refresh mỗi 5 phút trong giờ giao dịch là đủ.
-HEATMAP_TTL_SECONDS = 300.0
+# Heatmap đổi theo phiên — vnstock free tier 20 req/min nên cache 30 phút để
+# không trigger rate limit liên tục. Stale-while-revalidate friendly.
+HEATMAP_TTL_SECONDS = 1800.0
 
-# Số worker song song khi pull giá. Bằng với backtest_service để tránh ban từ vnstock.
-MAX_WORKERS = 8
+# Số worker song song. vnstock free tier 20 req/min → 3 worker là ngưỡng an toàn.
+# 8 worker hit limit trong < 1 phút và kill process.
+MAX_WORKERS = 3
 
-# Số mã tối đa lấy mỗi ngành để tính avg (tránh quá tải khi ngành có 50+ mã).
-MAX_SYMBOLS_PER_SECTOR = 20
+# Số mã tối đa lấy mỗi ngành — giảm xuống để tổng số call < 20 với 4-6 ngành chính.
+MAX_SYMBOLS_PER_SECTOR = 5
 
 # Fallback VN30 — đồng bộ với backtest_service.VN30_SYMBOLS để UI nhất quán.
 _FALLBACK_VN30 = [
