@@ -96,11 +96,12 @@ def _fetchall(con, sql: str, params: tuple = ()):
 
 
 def _begin(con):
-    """Khởi BEGIN với row lock cho safety."""
+    """Bắt đầu transaction."""
     if USE_POSTGRES:
-        # psycopg auto-begins. Đặt isolation cao nhất cho atomic check-and-update.
-        # SERIALIZABLE đảm bảo check shares + insert lot không bị race.
-        con.execute("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        # psycopg 3 với autocommit=False tự begin transaction implicit khi có statement.
+        # KHÔNG gọi BEGIN explicit vì transaction đã active từ statement trước.
+        # Mặc định READ COMMITTED đủ cho use case 1 user 1 portfolio.
+        pass
     else:
         con.execute("BEGIN IMMEDIATE")
 
