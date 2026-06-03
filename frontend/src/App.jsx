@@ -8,7 +8,13 @@ import PortfolioTracker from './components/PortfolioTracker';
 import Fundamentals from './components/Fundamentals';
 import News from './components/News';
 import BacktestModal from './components/BacktestModal';
-import { Activity } from 'lucide-react';
+import MarketPanel from './components/MarketPanel';
+import AIScanner from './components/AIScanner';
+import AlertsManager from './components/AlertsManager';
+import CalendarPanel from './components/CalendarPanel';
+import InsiderPanel from './components/InsiderPanel';
+import PortfolioReview from './components/PortfolioReview';
+import { Activity, Radar, Briefcase } from 'lucide-react';
 
 // API endpoint: dev mặc định localhost; prod đặt VITE_API_BASE qua Vercel env.
 // Bỏ trailing slash để không gây double-slash khi nối path.
@@ -72,6 +78,8 @@ export default function App() {
 
   // Backtest modal
   const [showBacktest, setShowBacktest] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [showPortfolioReview, setShowPortfolioReview] = useState(false);
 
   // Fetch search results on mount or query change
   useEffect(() => {
@@ -537,6 +545,24 @@ export default function App() {
 
           <button
             className="btn btn-outline"
+            onClick={() => setShowScanner(true)}
+            style={{ padding: '8px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <Radar size={14} />
+            <span>AI Scanner</span>
+          </button>
+
+          <button
+            className="btn btn-outline"
+            onClick={() => setShowPortfolioReview(true)}
+            style={{ padding: '8px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <Briefcase size={14} />
+            <span>Review danh mục</span>
+          </button>
+
+          <button
+            className="btn btn-outline"
             onClick={() => setShowBacktest(true)}
             style={{ padding: '8px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: 6 }}
           >
@@ -595,6 +621,9 @@ export default function App() {
         
         {/* Column 1: Search, Watchlist, & Manual Trading Panel */}
         <section className="column">
+          {/* Market overview - foreign trade + sector heatmap */}
+          <MarketPanel apiBase={API_BASE} />
+
           {/* Search Box */}
           <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
             <div className="panel-header">
@@ -757,6 +786,20 @@ export default function App() {
               ) : null}
             </div>
           </div>
+
+          {/* Lịch sự kiện 30 ngày — chỉ filter portfolio + watchlist */}
+          <CalendarPanel
+            apiBase={API_BASE}
+            watchlistSymbols={[
+              ...new Set([
+                ...portfolio.holdings.map(h => h.symbol),
+                'FPT', 'HPG', 'TCB', 'VNM', 'SSI', 'VND',
+              ]),
+            ]}
+          />
+
+          {/* Alerts engine */}
+          <AlertsManager apiBase={API_BASE} />
         </section>
 
         {/* Column 2: Main Chart & Portfolio */}
@@ -800,16 +843,19 @@ export default function App() {
           />
         </section>
 
-        {/* Column 3: AI Analyst Panel */}
+        {/* Column 3: AI Analyst Panel + Insider deals */}
         <section className="column">
-          <AiAnalyst 
-            analysisData={aiAnalysis} 
-            isAnalyzing={isAnalyzing} 
+          <AiAnalyst
+            analysisData={aiAnalysis}
+            isAnalyzing={isAnalyzing}
             onRunAnalysis={handleRunAiAnalysis}
             chatMessages={chatMessages}
             onSendMessage={handleSendMessage}
             isChatting={isChatting}
           />
+
+          {/* Giao dịch nội bộ cho mã đang xem */}
+          <InsiderPanel apiBase={API_BASE} symbol={selectedStock.symbol} />
         </section>
 
       </main>
@@ -819,6 +865,34 @@ export default function App() {
         onClose={() => setShowBacktest(false)}
         defaultSymbol={selectedStock.symbol}
         apiBase={API_BASE}
+      />
+
+      {/* AI Scanner modal */}
+      {showScanner && (
+        <div className="scanner-backdrop" onClick={() => setShowScanner(false)}>
+          <div className="scanner-modal glass-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="scanner-modal-header">
+              <span>AI Scanner</span>
+              <button className="scanner-modal-close" onClick={() => setShowScanner(false)}>×</button>
+            </div>
+            <AIScanner
+              apiBase={API_BASE}
+              apiKey={apiKey}
+              onSelectSymbol={(sym) => {
+                setSelectedStock({ symbol: sym, name: sym, exchange: 'HOSE' });
+                setShowScanner(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Portfolio Review modal */}
+      <PortfolioReview
+        open={showPortfolioReview}
+        onClose={() => setShowPortfolioReview(false)}
+        apiBase={API_BASE}
+        apiKey={apiKey}
       />
 
       {/* Embedded page styles */}
@@ -1048,6 +1122,35 @@ export default function App() {
         .font-bold {
           font-weight: 700;
         }
+
+        /* AI Scanner modal wrapper */
+        .scanner-backdrop {
+          position: fixed; inset: 0; z-index: 200;
+          background: rgba(2, 6, 23, 0.7);
+          backdrop-filter: blur(4px);
+          display: flex; align-items: center; justify-content: center;
+          animation: fade-in 0.2s ease-out;
+        }
+        .scanner-modal {
+          width: min(1000px, 94vw);
+          max-height: 92vh;
+          padding: 18px 22px;
+          display: flex; flex-direction: column;
+          overflow-y: auto;
+        }
+        .scanner-modal-header {
+          display: flex; align-items: center; justify-content: space-between;
+          margin-bottom: 12px;
+          font-family: var(--font-display);
+          font-weight: 700;
+          font-size: 16px;
+        }
+        .scanner-modal-close {
+          background: transparent; border: none; color: var(--text-muted);
+          cursor: pointer; font-size: 24px; line-height: 1;
+          padding: 0 8px;
+        }
+        .scanner-modal-close:hover { color: var(--text-primary); }
 
         /* Risk Config */
         .risk-grid {

@@ -25,6 +25,82 @@ from storage_service import (
     reset_portfolio,
 )
 
+# === Phase 2 services (guarded imports — skip endpoints if any module fails) ===
+try:
+    from foreign_service import (
+        fetch_foreign_trade_for_symbol,
+        fetch_top_foreign_today,
+        format_foreign_for_prompt,
+    )
+    _FOREIGN_OK = True
+except Exception as _e:
+    print(f"[phase2] foreign_service unavailable: {_e}")
+    _FOREIGN_OK = False
+
+try:
+    from sector_service import (
+        get_sector_heatmap,
+        get_vn30_symbols,
+        get_vn100_symbols,
+    )
+    _SECTOR_OK = True
+except Exception as _e:
+    print(f"[phase2] sector_service unavailable: {_e}")
+    _SECTOR_OK = False
+
+try:
+    from scanner_service import scan_universe
+    _SCANNER_OK = True
+except Exception as _e:
+    print(f"[phase2] scanner_service unavailable: {_e}")
+    _SCANNER_OK = False
+
+try:
+    from alerts_service import (
+        create_alert,
+        list_alerts,
+        delete_alert,
+        check_alerts,
+    )
+    _ALERTS_OK = True
+except Exception as _e:
+    print(f"[phase2] alerts_service unavailable: {_e}")
+    _ALERTS_OK = False
+
+try:
+    from calendar_service import (
+        get_dividend_calendar,
+        get_upcoming_events,
+    )
+    _CALENDAR_OK = True
+except Exception as _e:
+    print(f"[phase2] calendar_service unavailable: {_e}")
+    _CALENDAR_OK = False
+
+try:
+    from insider_service import get_insider_deals
+    _INSIDER_OK = True
+except Exception as _e:
+    print(f"[phase2] insider_service unavailable: {_e}")
+    _INSIDER_OK = False
+
+try:
+    from portfolio_review_service import review_portfolio
+    _REVIEW_OK = True
+except Exception as _e:
+    print(f"[phase2] portfolio_review_service unavailable: {_e}")
+    _REVIEW_OK = False
+
+try:
+    from multitimeframe_service import (
+        fetch_multi_timeframe,
+        format_mtf_for_prompt,
+    )
+    _MTF_OK = True
+except Exception as _e:
+    print(f"[phase2] multitimeframe_service unavailable: {_e}")
+    _MTF_OK = False
+
 load_dotenv()
 
 app = FastAPI(title="Vietnamese Stock AI Analyzer API")
@@ -261,21 +337,21 @@ def get_historical_data(symbol: str, period: str = "6mo", interval: str = "1d"):
         raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")
 
 @app.post("/api/ai/analyze")
-def analyze_stock(req: AnalysisRequest):
+def analyze_stock(req: AnalysisRequest, mtf: bool = Query(False, description="Include multi-timeframe analysis")):
     symbol = req.symbol.strip().upper()
     if not is_vn_stock(symbol):
         raise HTTPException(status_code=400, detail="Chỉ hỗ trợ phân tích cổ phiếu Việt Nam.")
-        
+
     try:
         df, formatted_symbol = fetch_stock_data(symbol, period="6mo", interval="1d")
         if df is None:
             raise HTTPException(status_code=404, detail=formatted_symbol)
-            
+
         if len(df) < 2:
             raise HTTPException(status_code=400, detail="Không đủ dữ liệu lịch sử để phân tích.")
-            
+
         latest_row = df.iloc[-1]
-        
+
         indicators = {
             "rsi": float(latest_row["RSI"]),
             "macd": float(latest_row["MACD"]),
@@ -285,7 +361,7 @@ def analyze_stock(req: AnalysisRequest):
             "ema50": float(latest_row["EMA50"]),
             "ema200": float(latest_row["EMA200"])
         }
-        
+
         last_5 = df.tail(5)
         history_summary_lines = []
         for idx, row in last_5.iterrows():
@@ -293,12 +369,32 @@ def analyze_stock(req: AnalysisRequest):
                 f"- Ngày {idx.strftime('%Y-%m-%d')}: Mở={row['Open']:.2f}, Cao={row['High']:.2f}, Thấp={row['Low']:.2f}, Đóng={row['Close']:.2f}, Khối lượng={int(row['Volume'])}"
             )
         history_summary = "\n".join(history_summary_lines)
-        
+
         intraday_summary = fetch_intraday_summary(symbol)
         fundamentals = fetch_fundamentals(symbol)
         fundamentals_summary = format_fundamentals_for_prompt(fundamentals)
         news_items = get_recent_news(symbol, limit=5)
         news_summary = format_news_for_prompt(news_items)
+
+        # Phase 2: foreign trade context (best-effort, never break the analyze flow)
+        foreign_data = None
+        foreign_summary = ""
+        if _FOREIGN_OK:
+            try:
+                foreign_data = fetch_foreign_trade_for_symbol(symbol)
+                foreign_summary = format_foreign_for_prompt(foreign_data) or ""
+            except Exception as fe:
+                print(f"[analyze] foreign fetch failed for {symbol}: {fe}")
+
+        # Phase 2 (opt-in): multi-timeframe context
+        mtf_data = None
+        mtf_summary = ""
+        if mtf and _MTF_OK:
+            try:
+                mtf_data = fetch_multi_timeframe(symbol)
+                mtf_summary = format_mtf_for_prompt(mtf_data) or ""
+            except Exception as me:
+                print(f"[analyze] mtf fetch failed for {symbol}: {me}")
 
         current_price = float(latest_row["Close"])
         analysis_result = get_ai_analysis(
@@ -310,9 +406,11 @@ def analyze_stock(req: AnalysisRequest):
             api_key=req.apiKey,
             fundamentals_summary=fundamentals_summary,
             news_summary=news_summary,
+            foreign_summary=foreign_summary,
+            mtf_summary=mtf_summary,
         )
 
-        return {
+        response = {
             "symbol": symbol,
             "formatted_symbol": formatted_symbol,
             "current_price": current_price,
@@ -322,6 +420,11 @@ def analyze_stock(req: AnalysisRequest):
             "news": news_items,
             "analysis": analysis_result,
         }
+        if foreign_data is not None:
+            response["foreign"] = foreign_data
+        if mtf_data is not None:
+            response["multitimeframe"] = mtf_data
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -360,6 +463,252 @@ def chat(req: ChatRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi chat AI: {str(e)}")
+
+# ===========================================================================
+# Phase 2 endpoints
+# Each route is gated on its service flag; if a service failed to import the
+# endpoint is simply not registered (request returns 404 naturally).
+# Defensive: every handler wraps logic in try/except so an unexpected service
+# error returns a clean HTTP 500 instead of crashing the worker.
+# ===========================================================================
+
+# ---- Foreign trade ----
+if _FOREIGN_OK:
+    @app.get("/api/foreign/top")
+    def api_foreign_top(limit: int = 10):
+        try:
+            limit = max(1, min(50, limit))
+            return fetch_top_foreign_today(top=limit)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi lấy top khối ngoại: {str(e)}")
+
+    @app.get("/api/foreign")
+    def api_foreign_symbol(symbol: str):
+        try:
+            symbol = symbol.strip().upper()
+            if not is_vn_stock(symbol):
+                raise HTTPException(status_code=400, detail="Chỉ hỗ trợ mã chứng khoán Việt Nam (3 ký tự).")
+            return fetch_foreign_trade_for_symbol(symbol)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi dữ liệu khối ngoại: {str(e)}")
+
+
+# ---- Sector heatmap + VN100 ----
+if _SECTOR_OK:
+    @app.get("/api/sectors/heatmap")
+    def api_sector_heatmap():
+        try:
+            return get_sector_heatmap()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi heatmap ngành: {str(e)}")
+
+    @app.get("/api/vn100")
+    def api_vn100():
+        try:
+            return {"symbols": get_vn100_symbols()}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi lấy VN100: {str(e)}")
+
+
+# ---- Scanner ----
+class ScannerRequest(BaseModel):
+    universe: Optional[List[str]] = None
+    strategy: Optional[str] = "all"
+    apiKey: Optional[str] = None
+
+
+if _SCANNER_OK:
+    @app.post("/api/scanner/scan")
+    def api_scanner_scan(req: ScannerRequest):
+        try:
+            universe = req.universe
+            # Default universe: VN30 if sector_service is available, else hard-coded
+            if not universe:
+                if _SECTOR_OK:
+                    try:
+                        universe = get_vn30_symbols()
+                    except Exception:
+                        universe = VN30_SYMBOLS
+                else:
+                    universe = VN30_SYMBOLS
+            return scan_universe(
+                symbols=universe,
+                strategy_filter=req.strategy or "all",
+                api_key=req.apiKey,
+            )
+        except HTTPException:
+            raise
+        except TypeError:
+            # Fallback if scan_universe signature differs (defensive)
+            try:
+                return scan_universe(universe)  # type: ignore[arg-type]
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Lỗi quét: {str(e)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi quét: {str(e)}")
+
+
+# ---- Alerts ----
+class AlertCreateRequest(BaseModel):
+    symbol: str
+    condition: str
+    threshold: float
+
+
+if _ALERTS_OK:
+    @app.get("/api/alerts")
+    def api_list_alerts(symbol: Optional[str] = None):
+        try:
+            sym = symbol.strip().upper() if symbol else None
+            return {"alerts": list_alerts(symbol=sym)}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi danh sách cảnh báo: {str(e)}")
+
+    @app.post("/api/alerts")
+    def api_create_alert(req: AlertCreateRequest):
+        try:
+            symbol = req.symbol.strip().upper()
+            if not is_vn_stock(symbol):
+                raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
+            if not req.condition or not req.condition.strip():
+                raise HTTPException(status_code=400, detail="Thiếu điều kiện cảnh báo.")
+            return create_alert(
+                symbol=symbol,
+                condition=req.condition.strip(),
+                threshold=float(req.threshold),
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi tạo cảnh báo: {str(e)}")
+
+    @app.delete("/api/alerts/{alert_id}")
+    def api_delete_alert(alert_id: str):
+        try:
+            ok = delete_alert(alert_id)
+            if not ok:
+                raise HTTPException(status_code=404, detail="Không tìm thấy cảnh báo.")
+            return {"ok": True, "id": alert_id}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi xoá cảnh báo: {str(e)}")
+
+    @app.post("/api/alerts/check")
+    def api_check_alerts():
+        try:
+            triggered = check_alerts()
+            return {"triggered": triggered, "count": len(triggered) if isinstance(triggered, list) else 0}
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi kiểm tra cảnh báo: {str(e)}")
+
+
+# ---- Calendar ----
+if _CALENDAR_OK:
+    @app.get("/api/calendar/upcoming")
+    def api_calendar_upcoming(symbols: str = "", days_ahead: int = 30):
+        try:
+            sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+            if not sym_list:
+                # Fallback to portfolio holdings if no symbols passed
+                try:
+                    pf = get_portfolio() or {}
+                    holdings = pf.get("holdings") or pf.get("positions") or []
+                    if isinstance(holdings, dict):
+                        sym_list = list(holdings.keys())
+                    else:
+                        sym_list = [h.get("symbol") for h in holdings if isinstance(h, dict) and h.get("symbol")]
+                except Exception:
+                    sym_list = []
+            sym_list = [s for s in sym_list if is_vn_stock(s)]
+            if not sym_list:
+                return {"dividends": [], "events": [], "symbols": []}
+
+            dividends: List[Dict] = []
+            events: List[Dict] = []
+            try:
+                dividends = get_dividend_calendar(sym_list, days_ahead=days_ahead) or []
+            except Exception as de:
+                print(f"[calendar] dividend fetch failed: {de}")
+            try:
+                events = get_upcoming_events(sym_list, days_ahead=max(days_ahead, 60)) or []
+            except Exception as ee:
+                print(f"[calendar] events fetch failed: {ee}")
+
+            return {
+                "symbols": sym_list,
+                "dividends": dividends,
+                "events": events,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi lịch sự kiện: {str(e)}")
+
+
+# ---- Insider deals ----
+if _INSIDER_OK:
+    @app.get("/api/insider")
+    def api_insider(symbol: str, days: int = 30):
+        try:
+            symbol = symbol.strip().upper()
+            if not is_vn_stock(symbol):
+                raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
+            days = max(1, min(365, days))
+            # get_insider_deals(symbol, last_n=20) — interpret `days` as a window hint.
+            # Pass last_n generously; service-level filtering by date is best-effort.
+            try:
+                return {"symbol": symbol, "days": days, "deals": get_insider_deals(symbol, last_n=50)}
+            except TypeError:
+                return {"symbol": symbol, "days": days, "deals": get_insider_deals(symbol)}  # type: ignore[call-arg]
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi giao dịch nội bộ: {str(e)}")
+
+
+# ---- Portfolio review ----
+class PortfolioReviewRequest(BaseModel):
+    apiKey: Optional[str] = None
+
+
+if _REVIEW_OK:
+    @app.post("/api/portfolio/review")
+    def api_portfolio_review(req: PortfolioReviewRequest):
+        try:
+            return review_portfolio(api_key=req.apiKey)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi đánh giá danh mục: {str(e)}")
+
+
+# ---- Multi-timeframe ----
+if _MTF_OK:
+    @app.get("/api/multitimeframe")
+    def api_multitimeframe(symbol: str):
+        try:
+            symbol = symbol.strip().upper()
+            if not is_vn_stock(symbol):
+                raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
+            return fetch_multi_timeframe(symbol)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi đa khung thời gian: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn

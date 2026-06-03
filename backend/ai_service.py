@@ -77,7 +77,7 @@ def _strip_json_fence(text: str) -> str:
     return t.strip()
 
 
-def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history_summary: str, intraday_summary: str, api_key: str, fundamentals_summary: str = "", news_summary: str = ""):
+def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history_summary: str, intraday_summary: str, api_key: str, fundamentals_summary: str = "", news_summary: str = "", foreign_summary: str = "", mtf_summary: str = ""):
     """
     Gọi Gemini API phân tích chỉ báo kỹ thuật + dòng tiền nội ngày.
     Trả về JSON gồm khuyến nghị, độ tin cậy, giá mục tiêu, stop-loss, và các giải thích.
@@ -99,6 +99,14 @@ def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history
         }
 
     prompt = _build_analysis_prompt(symbol, current_price, indicators, history_summary, intraday_summary, fundamentals_summary, news_summary)
+    # Append Phase 2 context blocks if provided (foreign flow + multi-timeframe)
+    extra_blocks = []
+    if foreign_summary:
+        extra_blocks.append("LUỒNG TIỀN KHỐI NGOẠI (Foreign trade):\n" + foreign_summary)
+    if mtf_summary:
+        extra_blocks.append("PHÂN TÍCH ĐA KHUNG THỜI GIAN (Multi-timeframe):\n" + mtf_summary)
+    if extra_blocks:
+        prompt = prompt + "\n\n" + "\n\n".join(extra_blocks)
 
     structured_error = None
     try:

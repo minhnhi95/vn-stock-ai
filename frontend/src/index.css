@@ -321,3 +321,218 @@ body {
   20% { opacity: 1; }
   100% { opacity: .2; }
 }
+
+/* ============================================================
+   RESPONSIVE BREAKPOINTS
+   ============================================================
+   Desktop default: 3 columns (320px | 1fr | 380px)
+   - Tablet (<=1024px): 2 columns — col1+col2 ghép trái, col3 dưới
+   - Mobile (<=640px): 1 column, stack vertical, header collapse
+   ============================================================ */
+
+/* TABLET — 2 columns layout */
+@media (max-width: 1024px) {
+  .app-container {
+    padding: 12px;
+    gap: 12px;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 280px 1fr;
+    gap: 12px;
+  }
+
+  /* Column 3 (AI/News) xuống dưới, full-width */
+  .ai-column,
+  .right-column,
+  .dashboard-grid > .column:nth-child(3) {
+    grid-column: 1 / -1;
+    height: auto;
+    min-height: 360px;
+    max-height: 520px;
+  }
+
+  /* Header stats giảm gap */
+  .header-stats {
+    gap: 16px;
+  }
+
+  .stat-label {
+    font-size: 10px;
+  }
+
+  .stat-value {
+    font-size: 14px;
+  }
+}
+
+/* MOBILE — 1 column, stack vertical */
+@media (max-width: 640px) {
+  body {
+    overflow-x: hidden;
+  }
+
+  .app-container {
+    padding: 8px;
+    gap: 10px;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  /* Header collapse */
+  .app-header {
+    flex-direction: row;
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 56px;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .logo-section {
+    gap: 8px;
+  }
+
+  .logo-text {
+    font-size: 18px;
+    letter-spacing: 0.3px;
+  }
+
+  /* Header stats collapse vào menu — hide by default, show via toggle */
+  .header-stats {
+    display: none;
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
+    margin-top: 8px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    order: 3;
+  }
+
+  .header-stats.is-open,
+  .app-header.menu-open .header-stats {
+    display: flex;
+  }
+
+  .stat-item {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 12px;
+  }
+
+  .stat-label {
+    font-size: 11px;
+  }
+
+  .stat-value {
+    font-size: 15px;
+  }
+
+  /* Menu toggle button (consumer renders <button class="header-menu-toggle">) */
+  .header-menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .header-menu-toggle:hover,
+  .header-menu-toggle:active {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--color-accent);
+  }
+
+  /* Grid → single column */
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    /* Allow page-level scroll on mobile instead of nested column scrolling */
+    flex-grow: 0;
+  }
+
+  .column,
+  .main-column,
+  .ai-column,
+  .right-column {
+    min-height: 0;
+    height: auto;
+    grid-column: 1 / -1;
+    gap: 10px;
+  }
+
+  /* Each glass-panel can grow to its content */
+  .glass-panel {
+    border-radius: 12px;
+  }
+
+  .panel-header {
+    padding: 12px 14px;
+    font-size: 15px;
+  }
+
+  .panel-content {
+    padding: 12px 14px;
+    gap: 12px;
+    /* Disable nested scroll — let body scroll */
+    overflow-y: visible;
+  }
+
+  /* Chart panel: smaller height on mobile */
+  .chart-panel,
+  .chart-container,
+  [class*="chart"] .panel-content {
+    min-height: 280px;
+  }
+
+  .chart-panel {
+    height: 280px;
+  }
+
+  /* Touch targets — 44px min on buttons */
+  .btn {
+    min-height: 44px;
+    padding: 12px 18px;
+    font-size: 15px;
+  }
+
+  .btn-icon,
+  .icon-btn,
+  button.icon-only {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Inputs / search boxes — larger tap target */
+  input[type="text"],
+  input[type="search"],
+  input[type="number"],
+  select,
+  textarea {
+    min-height: 44px;
+    font-size: 16px; /* prevents iOS zoom-on-focus */
+  }
+}
+
+/* DESKTOP — explicit chart height (keeps 380px as spec) */
+@media (min-width: 641px) {
+  .chart-panel {
+    height: 380px;
+  }
+}
