@@ -120,10 +120,13 @@ Railway tự restart sau khi save.
 
 1. Mở `https://vn-stock-ai-XXX.vercel.app`
 2. Bấm **Cấu hình API Key** → dán Gemini key
-3. Chọn mã (VD: FPT) → phải thấy chart, fundamentals (P/E, ROE...), news load
-4. Bấm **Phân tích AI** → trả về khuyến nghị có cấu trúc
-5. Mua thử 100 CP → reload trang → vẫn thấy holdings (đã persist vào Neon Postgres)
-6. Bấm **Backtest → Quét VN30** → chạy thử trên cloud (không bị timeout vì Railway persistent)
+3. Chọn mã (VD: FPT) → phải thấy chart, chỉ số cơ bản (P/E, ROE... kèm câu giải
+   thích tiếng Việt và trung vị ngành), tin tức load được
+4. Panel **Kiểm tra an toàn** → hiện đủ 6 tiêu chí, mục thiếu dữ liệu phải ghi
+   "Thiếu dữ liệu" chứ không phải "Đạt"
+5. Nhập một dòng giao dịch tay → reload trang → vẫn thấy vị thế (đã persist vào
+   Neon Postgres)
+6. Bấm **Phân tích AI** → trả về phân tích có cấu trúc
 
 Nếu CORS error trong DevTools console → kiểm tra `CORS_ORIGINS` ở Railway đúng URL Vercel chưa (KHÔNG có trailing slash, KHÔNG có `/api`).
 
