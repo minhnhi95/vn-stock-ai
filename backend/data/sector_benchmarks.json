@@ -1,0 +1,1305 @@
+{
+ "generated_at": "2026-09-11",
+ "universe": "all",
+ "min_sample": 5,
+ "sectors": {
+  "Xây dựng và Vật liệu": {
+   "metrics": {
+    "pe": {
+     "median": 13.31,
+     "sample": 12
+    },
+    "pb": {
+     "median": 1.315,
+     "sample": 12
+    },
+    "roe": {
+     "median": 9.695,
+     "sample": 12
+    },
+    "roa": {
+     "median": 2.555,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 6.225,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 21.025,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.6522,
+     "sample": 12
+    },
+    "dividend_yield": {
+     "median": 1.5,
+     "sample": 12
+    },
+    "revenue_growth": {
+     "median": 18.625,
+     "sample": 12
+    },
+    "earnings_growth": {
+     "median": 21.04,
+     "sample": 11
+    }
+   },
+   "members": [
+    "BMP",
+    "CII",
+    "CTD",
+    "CTR",
+    "GEL",
+    "HHV",
+    "HT1",
+    "MST",
+    "NTP",
+    "PC1",
+    "VCG",
+    "VGC"
+   ]
+  },
+  "Hàng & Dịch vụ Công nghiệp": {
+   "metrics": {
+    "pe": {
+     "median": 15.96,
+     "sample": 12
+    },
+    "pb": {
+     "median": 1.82,
+     "sample": 12
+    },
+    "roe": {
+     "median": 13.2,
+     "sample": 12
+    },
+    "roa": {
+     "median": 5.83,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 13.43,
+     "sample": 11
+    },
+    "gross_margin": {
+     "median": 16.56,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.498,
+     "sample": 12
+    },
+    "dividend_yield": {
+     "median": 2.0,
+     "sample": 12
+    },
+    "revenue_growth": {
+     "median": 16.865,
+     "sample": 12
+    },
+    "earnings_growth": {
+     "median": 8.9,
+     "sample": 11
+    }
+   },
+   "members": [
+    "ACV",
+    "GEE",
+    "GEX",
+    "GMD",
+    "HAH",
+    "PVP",
+    "PVT",
+    "TDP",
+    "VEA",
+    "VOS",
+    "VSC",
+    "VTP"
+   ]
+  },
+  "Thực phẩm và đồ uống": {
+   "metrics": {
+    "pe": {
+     "median": 13.91,
+     "sample": 12
+    },
+    "pb": {
+     "median": 2.115,
+     "sample": 12
+    },
+    "roe": {
+     "median": 15.62,
+     "sample": 12
+    },
+    "roa": {
+     "median": 8.34,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 10.97,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 23.8,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.6039,
+     "sample": 12
+    },
+    "dividend_yield": {
+     "median": 1.5,
+     "sample": 12
+    },
+    "revenue_growth": {
+     "median": 3.48,
+     "sample": 12
+    },
+    "earnings_growth": {
+     "median": 12.79,
+     "sample": 11
+    }
+   },
+   "members": [
+    "ANV",
+    "BAF",
+    "DBC",
+    "HAG",
+    "KDC",
+    "MCH",
+    "MSN",
+    "PAN",
+    "SAB",
+    "SBT",
+    "VHC",
+    "VNM"
+   ]
+  },
+  "Điện, nước & xăng dầu khí đốt": {
+   "metrics": {
+    "pe": {
+     "median": 11.99,
+     "sample": 12
+    },
+    "pb": {
+     "median": 1.385,
+     "sample": 12
+    },
+    "roe": {
+     "median": 12.535,
+     "sample": 12
+    },
+    "roa": {
+     "median": 4.775,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 12.0,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 27.32,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.7502,
+     "sample": 12
+    },
+    "dividend_yield": {
+     "median": 1.0,
+     "sample": 12
+    },
+    "revenue_growth": {
+     "median": 20.58,
+     "sample": 12
+    },
+    "earnings_growth": {
+     "median": 11.98,
+     "sample": 12
+    }
+   },
+   "members": [
+    "ASP",
+    "BWE",
+    "BWS",
+    "GAS",
+    "GEG",
+    "HDG",
+    "NT2",
+    "PGC",
+    "POW",
+    "PPT",
+    "REE",
+    "TTA"
+   ]
+  },
+  "Bất động sản": {
+   "metrics": {
+    "pe": {
+     "median": 30.62,
+     "sample": 15
+    },
+    "pb": {
+     "median": 1.86,
+     "sample": 17
+    },
+    "roe": {
+     "median": 7.28,
+     "sample": 17
+    },
+    "roa": {
+     "median": 2.9,
+     "sample": 17
+    },
+    "net_margin": {
+     "median": 17.09,
+     "sample": 17
+    },
+    "gross_margin": {
+     "median": 35.27,
+     "sample": 17
+    },
+    "debt_to_equity": {
+     "median": 0.6023,
+     "sample": 17
+    },
+    "dividend_yield": {
+     "median": 0.0,
+     "sample": 17
+    },
+    "revenue_growth": {
+     "median": 5.45,
+     "sample": 15
+    },
+    "earnings_growth": {
+     "median": 12.315,
+     "sample": 16
+    }
+   },
+   "members": [
+    "BCM",
+    "DIG",
+    "DXG",
+    "KBC",
+    "KDH",
+    "KOS",
+    "NLG",
+    "NVL",
+    "PDR",
+    "SIP",
+    "SJS",
+    "TAL",
+    "TCH",
+    "VHM",
+    "VIC",
+    "VPI",
+    "VRE"
+   ]
+  },
+  "Tài nguyên Cơ bản": {
+   "metrics": {
+    "pe": {
+     "median": 18.15,
+     "sample": 11
+    },
+    "pb": {
+     "median": 1.4,
+     "sample": 12
+    },
+    "roe": {
+     "median": 6.715,
+     "sample": 12
+    },
+    "roa": {
+     "median": 2.43,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 6.445,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 16.21,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.6008,
+     "sample": 12
+    },
+    "dividend_yield": {
+     "median": 0.0,
+     "sample": 12
+    },
+    "revenue_growth": {
+     "median": 2.0,
+     "sample": 12
+    },
+    "earnings_growth": {
+     "median": 14.73,
+     "sample": 12
+    }
+   },
+   "members": [
+    "AAH",
+    "CAP",
+    "CLI",
+    "DHC",
+    "HGM",
+    "HHP",
+    "HPG",
+    "HSG",
+    "KSV",
+    "MSR",
+    "MZG",
+    "NKG"
+   ]
+  },
+  "Hàng cá nhân & Gia dụng": {
+   "metrics": {
+    "pe": {
+     "median": 10.16,
+     "sample": 7
+    },
+    "pb": {
+     "median": 0.83,
+     "sample": 7
+    },
+    "roe": {
+     "median": 2.13,
+     "sample": 7
+    },
+    "roa": {
+     "median": 1.41,
+     "sample": 7
+    },
+    "net_margin": {
+     "median": 6.14,
+     "sample": 7
+    },
+    "gross_margin": {
+     "median": 11.13,
+     "sample": 7
+    },
+    "debt_to_equity": {
+     "median": 0.232,
+     "sample": 7
+    },
+    "dividend_yield": {
+     "median": 3.0,
+     "sample": 5
+    },
+    "revenue_growth": {
+     "median": 6.98,
+     "sample": 7
+    },
+    "earnings_growth": {
+     "median": 29.55,
+     "sample": 7
+    }
+   },
+   "members": [
+    "A32",
+    "AAT",
+    "ADS",
+    "BBT",
+    "BDG",
+    "BKG",
+    "PNJ"
+   ]
+  },
+  "Hóa chất": {
+   "metrics": {
+    "pe": {
+     "median": 10.87,
+     "sample": 10
+    },
+    "pb": {
+     "median": 1.47,
+     "sample": 11
+    },
+    "roe": {
+     "median": 11.65,
+     "sample": 11
+    },
+    "roa": {
+     "median": 6.52,
+     "sample": 11
+    },
+    "net_margin": {
+     "median": 5.54,
+     "sample": 11
+    },
+    "gross_margin": {
+     "median": 15.15,
+     "sample": 11
+    },
+    "debt_to_equity": {
+     "median": 0.1889,
+     "sample": 11
+    },
+    "dividend_yield": {
+     "median": 4.0,
+     "sample": 11
+    },
+    "revenue_growth": {
+     "median": 0.0,
+     "sample": 11
+    },
+    "earnings_growth": {
+     "median": 76.79,
+     "sample": 10
+    }
+   },
+   "members": [
+    "AAA",
+    "ABS",
+    "AVG",
+    "BFC",
+    "BQP",
+    "BRC",
+    "BRR",
+    "DCM",
+    "DPM",
+    "GVR",
+    "PHR"
+   ]
+  },
+  "Y tế": {
+   "metrics": {
+    "pe": {
+     "median": 15.81,
+     "sample": 8
+    },
+    "pb": {
+     "median": 0.925,
+     "sample": 10
+    },
+    "roe": {
+     "median": 0.445,
+     "sample": 10
+    },
+    "roa": {
+     "median": 0.165,
+     "sample": 10
+    },
+    "net_margin": {
+     "median": 1.32,
+     "sample": 10
+    },
+    "gross_margin": {
+     "median": 24.67,
+     "sample": 10
+    },
+    "debt_to_equity": {
+     "median": 0.5639,
+     "sample": 10
+    },
+    "dividend_yield": {
+     "median": 0.0,
+     "sample": 8
+    },
+    "revenue_growth": {
+     "median": 9.74,
+     "sample": 10
+    },
+    "earnings_growth": {
+     "median": 3.4,
+     "sample": 9
+    }
+   },
+   "members": [
+    "AGP",
+    "AMP",
+    "AMV",
+    "APC",
+    "BCP",
+    "BIO",
+    "CDP",
+    "CNC",
+    "CVN",
+    "DAN"
+   ]
+  },
+  "Dịch vụ tài chính": {
+   "metrics": {
+    "pe": {
+     "median": 17.67,
+     "sample": 13
+    },
+    "pb": {
+     "median": 2.12,
+     "sample": 13
+    },
+    "roe": {
+     "median": 10.46,
+     "sample": 13
+    },
+    "roa": {
+     "median": 4.24,
+     "sample": 13
+    },
+    "net_margin": {
+     "median": 38.38,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 61.425,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 1.8535,
+     "sample": 12
+    },
+    "dividend_yield": {
+     "median": 0.0,
+     "sample": 13
+    },
+    "revenue_growth": {
+     "median": 74.41,
+     "sample": 11
+    },
+    "earnings_growth": {
+     "median": 85.66,
+     "sample": 11
+    }
+   },
+   "members": [
+    "BSI",
+    "CTS",
+    "DSE",
+    "EVF",
+    "FTS",
+    "HCM",
+    "SSI",
+    "TCX",
+    "VCI",
+    "VCK",
+    "VIX",
+    "VND",
+    "VPX"
+   ]
+  },
+  "Du lịch và Giải trí": {
+   "metrics": {
+    "pe": {
+     "median": 43.16,
+     "sample": 7
+    },
+    "pb": {
+     "median": 2.035,
+     "sample": 8
+    },
+    "roe": {
+     "median": 0.68,
+     "sample": 8
+    },
+    "roa": {
+     "median": 0.605,
+     "sample": 8
+    },
+    "net_margin": {
+     "median": 2.075,
+     "sample": 8
+    },
+    "gross_margin": {
+     "median": 11.69,
+     "sample": 8
+    },
+    "debt_to_equity": {
+     "median": 0.2515,
+     "sample": 8
+    },
+    "dividend_yield": {
+     "median": 0.0,
+     "sample": 7
+    },
+    "revenue_growth": {
+     "median": -3.395,
+     "sample": 8
+    },
+    "earnings_growth": {
+     "median": 0.0,
+     "sample": 7
+    }
+   },
+   "members": [
+    "ATS",
+    "BCV",
+    "BLN",
+    "BSG",
+    "BTV",
+    "DAH",
+    "VJC",
+    "VPL"
+   ]
+  },
+  "Truyền thông": {
+   "metrics": {
+    "pe": {
+     "median": 9.135,
+     "sample": 8
+    },
+    "pb": {
+     "median": 0.925,
+     "sample": 10
+    },
+    "roe": {
+     "median": 7.28,
+     "sample": 10
+    },
+    "roa": {
+     "median": 4.655,
+     "sample": 10
+    },
+    "net_margin": {
+     "median": 2.2,
+     "sample": 9
+    },
+    "gross_margin": {
+     "median": 31.905,
+     "sample": 10
+    },
+    "debt_to_equity": {
+     "median": 0.0,
+     "sample": 10
+    },
+    "dividend_yield": {
+     "median": 0.0,
+     "sample": 8
+    },
+    "revenue_growth": {
+     "median": 7.165,
+     "sample": 10
+    },
+    "earnings_growth": {
+     "median": 1.23,
+     "sample": 9
+    }
+   },
+   "members": [
+    "DAD",
+    "DST",
+    "EBS",
+    "FOC",
+    "STC",
+    "STH",
+    "VNB",
+    "VNZ",
+    "VPR",
+    "YEG"
+   ]
+  },
+  "Bán lẻ": {
+   "metrics": {
+    "pe": {
+     "median": 11.61,
+     "sample": 11
+    },
+    "pb": {
+     "median": 1.15,
+     "sample": 12
+    },
+    "roe": {
+     "median": 17.7,
+     "sample": 12
+    },
+    "roa": {
+     "median": 3.41,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 2.77,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 13.78,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.988,
+     "sample": 11
+    },
+    "dividend_yield": {
+     "median": 0.5,
+     "sample": 12
+    },
+    "revenue_growth": {
+     "median": 25.22,
+     "sample": 11
+    },
+    "earnings_growth": {
+     "median": 49.665,
+     "sample": 12
+    }
+   },
+   "members": [
+    "AFX",
+    "AST",
+    "DGW",
+    "DMX",
+    "FRT",
+    "MWG",
+    "PET",
+    "PIT",
+    "PSD",
+    "SAS",
+    "SVT",
+    "TH1"
+   ]
+  },
+  "Công nghệ Thông tin": {
+   "metrics": {
+    "pe": {
+     "median": 16.825,
+     "sample": 10
+    },
+    "pb": {
+     "median": 0.945,
+     "sample": 12
+    },
+    "roe": {
+     "median": 4.935,
+     "sample": 12
+    },
+    "roa": {
+     "median": 1.585,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 1.31,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 17.27,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.3871,
+     "sample": 12
+    },
+    "dividend_yield": {
+     "median": 0.0,
+     "sample": 12
+    },
+    "revenue_growth": {
+     "median": 25.83,
+     "sample": 11
+    },
+    "earnings_growth": {
+     "median": 2.1,
+     "sample": 12
+    }
+   },
+   "members": [
+    "CMG",
+    "ELC",
+    "FPT",
+    "ICT",
+    "ITD",
+    "SAM",
+    "SBD",
+    "SMT",
+    "ST8",
+    "UNI",
+    "VEC",
+    "VTC"
+   ]
+  },
+  "Ngân hàng": {
+   "metrics": {
+    "pe": {
+     "median": 8.115,
+     "sample": 18
+    },
+    "pb": {
+     "median": 1.525,
+     "sample": 18
+    },
+    "roe": {
+     "median": 17.4,
+     "sample": 18
+    },
+    "roa": {
+     "median": 1.575,
+     "sample": 18
+    },
+    "dividend_yield": {
+     "median": 0.5,
+     "sample": 18
+    },
+    "earnings_growth": {
+     "median": 13.72,
+     "sample": 18
+    }
+   },
+   "members": [
+    "ACB",
+    "BID",
+    "CTG",
+    "EIB",
+    "HDB",
+    "LPB",
+    "MBB",
+    "MSB",
+    "NAB",
+    "OCB",
+    "SHB",
+    "SSB",
+    "STB",
+    "TCB",
+    "TPB",
+    "VCB",
+    "VIB",
+    "VPB"
+   ]
+  },
+  "Ô tô và phụ tùng": {
+   "metrics": {
+    "pe": {
+     "median": 15.97,
+     "sample": 9
+    },
+    "pb": {
+     "median": 1.32,
+     "sample": 11
+    },
+    "roe": {
+     "median": 5.87,
+     "sample": 11
+    },
+    "roa": {
+     "median": 2.25,
+     "sample": 11
+    },
+    "net_margin": {
+     "median": 2.66,
+     "sample": 11
+    },
+    "gross_margin": {
+     "median": 9.16,
+     "sample": 11
+    },
+    "debt_to_equity": {
+     "median": 0.9913,
+     "sample": 11
+    },
+    "dividend_yield": {
+     "median": 1.0,
+     "sample": 11
+    },
+    "revenue_growth": {
+     "median": 9.8,
+     "sample": 11
+    },
+    "earnings_growth": {
+     "median": 0.0,
+     "sample": 9
+    }
+   },
+   "members": [
+    "CSM",
+    "CTF",
+    "DRC",
+    "HAX",
+    "HHS",
+    "HTL",
+    "HUT",
+    "SRC",
+    "SVC",
+    "TMT",
+    "VVS"
+   ]
+  },
+  "Bảo hiểm": {
+   "metrics": {
+    "pe": {
+     "median": 8.745,
+     "sample": 12
+    },
+    "pb": {
+     "median": 1.735,
+     "sample": 12
+    },
+    "roe": {
+     "median": 12.06,
+     "sample": 12
+    },
+    "roa": {
+     "median": 3.585,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 8.96,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 11.635,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.0,
+     "sample": 12
+    },
+    "dividend_yield": {
+     "median": 2.0,
+     "sample": 12
+    },
+    "revenue_growth": {
+     "median": 8.06,
+     "sample": 12
+    },
+    "earnings_growth": {
+     "median": 36.0,
+     "sample": 12
+    }
+   },
+   "members": [
+    "ABI",
+    "AIC",
+    "BHI",
+    "BIC",
+    "BLI",
+    "BMI",
+    "BVH",
+    "MIG",
+    "PRE",
+    "PTI",
+    "PVI",
+    "VNR"
+   ]
+  },
+  "Dầu khí": {
+   "metrics": {
+    "pe": {
+     "median": 15.9,
+     "sample": 10
+    },
+    "pb": {
+     "median": 1.02,
+     "sample": 11
+    },
+    "roe": {
+     "median": 4.605,
+     "sample": 12
+    },
+    "roa": {
+     "median": 2.745,
+     "sample": 12
+    },
+    "net_margin": {
+     "median": 1.84,
+     "sample": 12
+    },
+    "gross_margin": {
+     "median": 7.23,
+     "sample": 12
+    },
+    "debt_to_equity": {
+     "median": 0.6835,
+     "sample": 11
+    },
+    "dividend_yield": {
+     "median": 2.0,
+     "sample": 11
+    },
+    "revenue_growth": {
+     "median": 15.31,
+     "sample": 11
+    },
+    "earnings_growth": {
+     "median": 0.0,
+     "sample": 11
+    }
+   },
+   "members": [
+    "BSR",
+    "OIL",
+    "PEQ",
+    "PLX",
+    "POS",
+    "PTV",
+    "PVB",
+    "PVC",
+    "PVD",
+    "PVE",
+    "PVS",
+    "TOS"
+   ]
+  },
+  "Viễn thông": {
+   "metrics": {
+    "pe": {
+     "median": 12.07,
+     "sample": 6
+    },
+    "pb": {
+     "median": 1.48,
+     "sample": 6
+    },
+    "roe": {
+     "median": 18.47,
+     "sample": 6
+    },
+    "roa": {
+     "median": 12.82,
+     "sample": 6
+    },
+    "net_margin": {
+     "median": 12.16,
+     "sample": 6
+    },
+    "gross_margin": {
+     "median": 30.645,
+     "sample": 6
+    },
+    "debt_to_equity": {
+     "median": 0.0591,
+     "sample": 6
+    },
+    "dividend_yield": {
+     "median": 5.0,
+     "sample": 5
+    },
+    "revenue_growth": {
+     "median": 17.75,
+     "sample": 6
+    },
+    "earnings_growth": {
+     "median": 26.89,
+     "sample": 5
+    }
+   },
+   "members": [
+    "ABC",
+    "FOX",
+    "PIA",
+    "PTP",
+    "TTN",
+    "VGI"
+   ]
+  }
+ },
+ "symbol_sector": {
+  "BMP": "Xây dựng và Vật liệu",
+  "CII": "Xây dựng và Vật liệu",
+  "CTD": "Xây dựng và Vật liệu",
+  "CTR": "Xây dựng và Vật liệu",
+  "GEL": "Xây dựng và Vật liệu",
+  "HHV": "Xây dựng và Vật liệu",
+  "HT1": "Xây dựng và Vật liệu",
+  "MST": "Xây dựng và Vật liệu",
+  "NTP": "Xây dựng và Vật liệu",
+  "PC1": "Xây dựng và Vật liệu",
+  "VCG": "Xây dựng và Vật liệu",
+  "VGC": "Xây dựng và Vật liệu",
+  "ACV": "Hàng & Dịch vụ Công nghiệp",
+  "GEE": "Hàng & Dịch vụ Công nghiệp",
+  "GEX": "Hàng & Dịch vụ Công nghiệp",
+  "GMD": "Hàng & Dịch vụ Công nghiệp",
+  "HAH": "Hàng & Dịch vụ Công nghiệp",
+  "PVP": "Hàng & Dịch vụ Công nghiệp",
+  "PVT": "Hàng & Dịch vụ Công nghiệp",
+  "TDP": "Hàng & Dịch vụ Công nghiệp",
+  "VEA": "Hàng & Dịch vụ Công nghiệp",
+  "VOS": "Hàng & Dịch vụ Công nghiệp",
+  "VSC": "Hàng & Dịch vụ Công nghiệp",
+  "VTP": "Hàng & Dịch vụ Công nghiệp",
+  "ANV": "Thực phẩm và đồ uống",
+  "BAF": "Thực phẩm và đồ uống",
+  "DBC": "Thực phẩm và đồ uống",
+  "HAG": "Thực phẩm và đồ uống",
+  "KDC": "Thực phẩm và đồ uống",
+  "MCH": "Thực phẩm và đồ uống",
+  "MSN": "Thực phẩm và đồ uống",
+  "PAN": "Thực phẩm và đồ uống",
+  "SAB": "Thực phẩm và đồ uống",
+  "SBT": "Thực phẩm và đồ uống",
+  "VHC": "Thực phẩm và đồ uống",
+  "VNM": "Thực phẩm và đồ uống",
+  "ASP": "Điện, nước & xăng dầu khí đốt",
+  "BWE": "Điện, nước & xăng dầu khí đốt",
+  "BWS": "Điện, nước & xăng dầu khí đốt",
+  "GAS": "Điện, nước & xăng dầu khí đốt",
+  "GEG": "Điện, nước & xăng dầu khí đốt",
+  "HDG": "Điện, nước & xăng dầu khí đốt",
+  "NT2": "Điện, nước & xăng dầu khí đốt",
+  "PGC": "Điện, nước & xăng dầu khí đốt",
+  "POW": "Điện, nước & xăng dầu khí đốt",
+  "PPT": "Điện, nước & xăng dầu khí đốt",
+  "REE": "Điện, nước & xăng dầu khí đốt",
+  "TTA": "Điện, nước & xăng dầu khí đốt",
+  "BCM": "Bất động sản",
+  "DIG": "Bất động sản",
+  "DXG": "Bất động sản",
+  "KBC": "Bất động sản",
+  "KDH": "Bất động sản",
+  "KOS": "Bất động sản",
+  "NLG": "Bất động sản",
+  "NVL": "Bất động sản",
+  "PDR": "Bất động sản",
+  "SIP": "Bất động sản",
+  "SJS": "Bất động sản",
+  "TAL": "Bất động sản",
+  "TCH": "Bất động sản",
+  "VHM": "Bất động sản",
+  "VIC": "Bất động sản",
+  "VPI": "Bất động sản",
+  "VRE": "Bất động sản",
+  "AAH": "Tài nguyên Cơ bản",
+  "CAP": "Tài nguyên Cơ bản",
+  "CLI": "Tài nguyên Cơ bản",
+  "DHC": "Tài nguyên Cơ bản",
+  "HGM": "Tài nguyên Cơ bản",
+  "HHP": "Tài nguyên Cơ bản",
+  "HPG": "Tài nguyên Cơ bản",
+  "HSG": "Tài nguyên Cơ bản",
+  "KSV": "Tài nguyên Cơ bản",
+  "MSR": "Tài nguyên Cơ bản",
+  "MZG": "Tài nguyên Cơ bản",
+  "NKG": "Tài nguyên Cơ bản",
+  "A32": "Hàng cá nhân & Gia dụng",
+  "AAT": "Hàng cá nhân & Gia dụng",
+  "ADS": "Hàng cá nhân & Gia dụng",
+  "BBT": "Hàng cá nhân & Gia dụng",
+  "BDG": "Hàng cá nhân & Gia dụng",
+  "BKG": "Hàng cá nhân & Gia dụng",
+  "PNJ": "Hàng cá nhân & Gia dụng",
+  "AAA": "Hóa chất",
+  "ABS": "Hóa chất",
+  "AVG": "Hóa chất",
+  "BFC": "Hóa chất",
+  "BQP": "Hóa chất",
+  "BRC": "Hóa chất",
+  "BRR": "Hóa chất",
+  "DCM": "Hóa chất",
+  "DPM": "Hóa chất",
+  "GVR": "Hóa chất",
+  "PHR": "Hóa chất",
+  "AGP": "Y tế",
+  "AMP": "Y tế",
+  "AMV": "Y tế",
+  "APC": "Y tế",
+  "BCP": "Y tế",
+  "BIO": "Y tế",
+  "CDP": "Y tế",
+  "CNC": "Y tế",
+  "CVN": "Y tế",
+  "DAN": "Y tế",
+  "BSI": "Dịch vụ tài chính",
+  "CTS": "Dịch vụ tài chính",
+  "DSE": "Dịch vụ tài chính",
+  "EVF": "Dịch vụ tài chính",
+  "FTS": "Dịch vụ tài chính",
+  "HCM": "Dịch vụ tài chính",
+  "SSI": "Dịch vụ tài chính",
+  "TCX": "Dịch vụ tài chính",
+  "VCI": "Dịch vụ tài chính",
+  "VCK": "Dịch vụ tài chính",
+  "VIX": "Dịch vụ tài chính",
+  "VND": "Dịch vụ tài chính",
+  "VPX": "Dịch vụ tài chính",
+  "ATS": "Du lịch và Giải trí",
+  "BCV": "Du lịch và Giải trí",
+  "BLN": "Du lịch và Giải trí",
+  "BSG": "Du lịch và Giải trí",
+  "BTV": "Du lịch và Giải trí",
+  "DAH": "Du lịch và Giải trí",
+  "VJC": "Du lịch và Giải trí",
+  "VPL": "Du lịch và Giải trí",
+  "DAD": "Truyền thông",
+  "DST": "Truyền thông",
+  "EBS": "Truyền thông",
+  "FOC": "Truyền thông",
+  "STC": "Truyền thông",
+  "STH": "Truyền thông",
+  "VNB": "Truyền thông",
+  "VNZ": "Truyền thông",
+  "VPR": "Truyền thông",
+  "YEG": "Truyền thông",
+  "AFX": "Bán lẻ",
+  "AST": "Bán lẻ",
+  "DGW": "Bán lẻ",
+  "DMX": "Bán lẻ",
+  "FRT": "Bán lẻ",
+  "MWG": "Bán lẻ",
+  "PET": "Bán lẻ",
+  "PIT": "Bán lẻ",
+  "PSD": "Bán lẻ",
+  "SAS": "Bán lẻ",
+  "SVT": "Bán lẻ",
+  "TH1": "Bán lẻ",
+  "CMG": "Công nghệ Thông tin",
+  "ELC": "Công nghệ Thông tin",
+  "FPT": "Công nghệ Thông tin",
+  "ICT": "Công nghệ Thông tin",
+  "ITD": "Công nghệ Thông tin",
+  "SAM": "Công nghệ Thông tin",
+  "SBD": "Công nghệ Thông tin",
+  "SMT": "Công nghệ Thông tin",
+  "ST8": "Công nghệ Thông tin",
+  "UNI": "Công nghệ Thông tin",
+  "VEC": "Công nghệ Thông tin",
+  "VTC": "Công nghệ Thông tin",
+  "ACB": "Ngân hàng",
+  "BID": "Ngân hàng",
+  "CTG": "Ngân hàng",
+  "EIB": "Ngân hàng",
+  "HDB": "Ngân hàng",
+  "LPB": "Ngân hàng",
+  "MBB": "Ngân hàng",
+  "MSB": "Ngân hàng",
+  "NAB": "Ngân hàng",
+  "OCB": "Ngân hàng",
+  "SHB": "Ngân hàng",
+  "SSB": "Ngân hàng",
+  "STB": "Ngân hàng",
+  "TCB": "Ngân hàng",
+  "TPB": "Ngân hàng",
+  "VCB": "Ngân hàng",
+  "VIB": "Ngân hàng",
+  "VPB": "Ngân hàng",
+  "CSM": "Ô tô và phụ tùng",
+  "CTF": "Ô tô và phụ tùng",
+  "DRC": "Ô tô và phụ tùng",
+  "HAX": "Ô tô và phụ tùng",
+  "HHS": "Ô tô và phụ tùng",
+  "HTL": "Ô tô và phụ tùng",
+  "HUT": "Ô tô và phụ tùng",
+  "SRC": "Ô tô và phụ tùng",
+  "SVC": "Ô tô và phụ tùng",
+  "TMT": "Ô tô và phụ tùng",
+  "VVS": "Ô tô và phụ tùng",
+  "ABI": "Bảo hiểm",
+  "AIC": "Bảo hiểm",
+  "BHI": "Bảo hiểm",
+  "BIC": "Bảo hiểm",
+  "BLI": "Bảo hiểm",
+  "BMI": "Bảo hiểm",
+  "BVH": "Bảo hiểm",
+  "MIG": "Bảo hiểm",
+  "PRE": "Bảo hiểm",
+  "PTI": "Bảo hiểm",
+  "PVI": "Bảo hiểm",
+  "VNR": "Bảo hiểm",
+  "BSR": "Dầu khí",
+  "OIL": "Dầu khí",
+  "PEQ": "Dầu khí",
+  "PLX": "Dầu khí",
+  "POS": "Dầu khí",
+  "PTV": "Dầu khí",
+  "PVB": "Dầu khí",
+  "PVC": "Dầu khí",
+  "PVD": "Dầu khí",
+  "PVE": "Dầu khí",
+  "PVS": "Dầu khí",
+  "TOS": "Dầu khí",
+  "ABC": "Viễn thông",
+  "FOX": "Viễn thông",
+  "PIA": "Viễn thông",
+  "PTP": "Viễn thông",
+  "TTN": "Viễn thông",
+  "VGI": "Viễn thông"
+ }
+}
