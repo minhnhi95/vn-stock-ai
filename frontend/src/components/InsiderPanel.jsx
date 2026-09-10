@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Users, TrendingUp, TrendingDown, ArrowRightLeft, AlertCircle } from 'lucide-react';
 
 const fmtVN = (n) => {
@@ -8,12 +8,12 @@ const fmtVN = (n) => {
   if (abs >= 1e9) return `${(n / 1e9).toFixed(2)} tỷ`;
   if (abs >= 1e6) return `${(n / 1e6).toFixed(1)} triệu`;
   if (abs >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return Number(n).toLocaleString('vi-VN');
+  return Number(n).toLocaleString();
 };
 
 const fmtShares = (n) => {
   if (n === null || n === undefined || Number.isNaN(n)) return 'N/A';
-  return Number(n).toLocaleString('vi-VN');
+  return Number(n).toLocaleString();
 };
 
 const fmtDate = (d) => {
@@ -75,11 +75,16 @@ export default function InsiderPanel({ apiBase, symbol }) {
   const summary = data?.summary || {};
   const deals = data?.deals || [];
 
+  // Giá trị VND chỉ có khi lấy được giá hiện tại; số lượng thì luôn có.
+  const netShares = Number.isFinite(Number(summary.net_shares))
+    ? Number(summary.net_shares)
+    : null;
+  const hasValues = Boolean(summary.value_estimated) && Number(summary.buy_value || 0) > 0;
+
   const netTone = useMemo(() => {
-    const net = Number(summary.net);
-    if (!Number.isFinite(net) || net === 0) return 'neutral';
-    return net > 0 ? 'buy' : 'sell';
-  }, [summary.net]);
+    if (netShares === null || netShares === 0) return 'neutral';
+    return netShares > 0 ? 'buy' : 'sell';
+  }, [netShares]);
 
   return (
     <div className="glass-panel">
@@ -88,7 +93,7 @@ export default function InsiderPanel({ apiBase, symbol }) {
           <Users size={16} className="text-accent" />
           <span>Giao dịch nội bộ: {symbol}</span>
         </div>
-        <span className="insider-period">30 ngày qua</span>
+        <span className="insider-period">{data?.period_label || `${data?.days ?? 30} ngày qua`}</span>
       </div>
       <div className="panel-content insider-body">
         {loading ? (
@@ -100,20 +105,32 @@ export default function InsiderPanel({ apiBase, symbol }) {
           </div>
         ) : (
           <>
+            {hasValues ? (
+              <div className="insider-note">
+                Giá trị là ƯỚC TÍNH (số lượng × giá hiện tại) — nguồn dữ liệu không
+                công bố giá khớp của từng giao dịch nội bộ.
+              </div>
+            ) : null}
             <div className="insider-summary">
               <div className="insider-summary-cell buy">
                 <div className="insider-summary-head">
                   <TrendingUp size={12} />
                   <span>Tổng MUA</span>
                 </div>
-                <div className="insider-summary-value">{fmtVN(summary.buy_value)}</div>
+                <div className="insider-summary-value">{fmtShares(summary.buy_shares)} CP</div>
+                {hasValues ? (
+                  <div className="insider-summary-sub">≈ {fmtVN(summary.buy_value)}</div>
+                ) : null}
               </div>
               <div className="insider-summary-cell sell">
                 <div className="insider-summary-head">
                   <TrendingDown size={12} />
                   <span>Tổng BÁN</span>
                 </div>
-                <div className="insider-summary-value">{fmtVN(summary.sell_value)}</div>
+                <div className="insider-summary-value">{fmtShares(summary.sell_shares)} CP</div>
+                {hasValues ? (
+                  <div className="insider-summary-sub">≈ {fmtVN(summary.sell_value)}</div>
+                ) : null}
               </div>
               <div className={`insider-summary-cell net ${netTone}`}>
                 <div className="insider-summary-head">
@@ -121,16 +138,22 @@ export default function InsiderPanel({ apiBase, symbol }) {
                   <span>Net signal</span>
                 </div>
                 <div className="insider-summary-value">
-                  {summary.net !== undefined && summary.net !== null
-                    ? `${Number(summary.net) > 0 ? '+' : ''}${fmtVN(summary.net)}`
-                    : 'N/A'}
+                  {netShares === null
+                    ? 'N/A'
+                    : `${netShares > 0 ? '+' : ''}${fmtShares(netShares)} CP`}
                 </div>
+                {hasValues ? (
+                  <div className="insider-summary-sub">
+                    {Number(summary.net) > 0 ? '+' : ''}
+                    {fmtVN(summary.net)}
+                  </div>
+                ) : null}
               </div>
             </div>
 
             {!deals.length ? (
               <div className="insider-empty">
-                Không có giao dịch nội bộ nào được ghi nhận trong 30 ngày qua.
+                Không có giao dịch nội bộ nào được ghi nhận.
               </div>
             ) : (
               <div className="insider-table-wrap">
@@ -162,7 +185,7 @@ export default function InsiderPanel({ apiBase, symbol }) {
                           </td>
                           <td className="ta-right insider-num">{fmtShares(d.shares)}</td>
                           <td className={`ta-right insider-num ${buy ? 'val-buy' : 'val-sell'}`}>
-                            {fmtVN(d.value)}
+                            {d.value ? fmtVN(d.value) : '—'}
                           </td>
                           <td className="insider-reason">{d.reason || '—'}</td>
                         </tr>
@@ -177,6 +200,20 @@ export default function InsiderPanel({ apiBase, symbol }) {
       </div>
 
       <style>{`
+        .insider-summary-sub {
+          font-size: 9px;
+          color: var(--text-muted);
+          margin-top: 1px;
+        }
+        .insider-note {
+          font-size: 10px;
+          line-height: 1.4;
+          color: var(--text-muted);
+          background: rgba(148, 163, 184, 0.1);
+          border: 1px solid var(--border-color);
+          border-radius: 6px;
+          padding: 6px 8px;
+        }
         .insider-period {
           font-size: 10px;
           color: var(--text-muted);

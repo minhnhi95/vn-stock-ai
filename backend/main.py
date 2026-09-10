@@ -5,14 +5,14 @@ from dotenv import load_dotenv
 # vnstock free tier 20 req/min → khi limit hit, thư viện sys.exit() giết worker.
 import vnstock_safe  # noqa: F401 - side effect import
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import pandas as pd
 
 # Import services
-from stock_service import fetch_stock_data, format_chart_data, clean_symbol, fetch_intraday_summary, is_vn_stock
+from stock_service import fetch_stock_data, format_chart_data, clean_symbol, fetch_intraday_summary, is_vn_stock, nan_safe_float
 from ai_service import get_ai_analysis, chat_about_stock
 from market_service import (
     market_status,
@@ -20,14 +20,16 @@ from market_service import (
     fetch_fundamentals,
     format_fundamentals_for_prompt,
 )
+from metric_explainer import explain_for_symbol
 from news_service import get_recent_news, format_news_for_prompt, search_news_semantic
-from backtest_service import run_backtest, run_batch_backtest, VN30_SYMBOLS
+from market_universe import VN30_SYMBOLS
 from storage_service import (
-    get_portfolio,
-    get_transactions,
-    record_buy,
-    record_sell,
-    reset_portfolio,
+    get_daily_brief,
+    list_brief_dates,
+    clear_real_transactions,
+    delete_real_transaction,
+    insert_real_transactions,
+    list_real_transactions,
 )
 
 # === Phase 2 services (guarded imports — skip endpoints if any module fails) ===
@@ -54,11 +56,11 @@ except Exception as _e:
     _SECTOR_OK = False
 
 try:
-    from scanner_service import scan_universe
-    _SCANNER_OK = True
+    from safety_screen import screen_many, screen_symbol
+    _SAFETY_OK = True
 except Exception as _e:
-    print(f"[phase2] scanner_service unavailable: {_e}")
-    _SCANNER_OK = False
+    print(f"[phase3] safety_screen unavailable: {_e}")
+    _SAFETY_OK = False
 
 try:
     from alerts_service import (
@@ -66,6 +68,7 @@ try:
         list_alerts,
         delete_alert,
         check_alerts,
+        update_ai_signal,
     )
     _ALERTS_OK = True
 except Exception as _e:
@@ -83,7 +86,7 @@ except Exception as _e:
     _CALENDAR_OK = False
 
 try:
-    from insider_service import get_insider_deals
+    from insider_service import get_insider_deals, get_insider_report
     _INSIDER_OK = True
 except Exception as _e:
     print(f"[phase2] insider_service unavailable: {_e}")
@@ -95,6 +98,19 @@ try:
 except Exception as _e:
     print(f"[phase2] portfolio_review_service unavailable: {_e}")
     _REVIEW_OK = False
+
+try:
+    from broker_import_service import (
+        ImportError_,
+        build_manual_record,
+        parse_broker_csv,
+        DEFAULT_BROKER_FEE_RATE,
+    )
+    from real_portfolio_service import get_real_portfolio, get_trading_stats
+    _REAL_OK = True
+except Exception as _e:
+    print(f"[phase3] real portfolio unavailable: {_e}")
+    _REAL_OK = False
 
 try:
     from multitimeframe_service import (
@@ -131,7 +147,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Vietnamese popular stock tickers
+try:
+    from search_service import search_symbols, get_index as get_search_index
+    _SEARCH_OK = True
+except Exception as _e:
+    print(f"[phase2] search_service unavailable: {_e}")
+    _SEARCH_OK = False
+
+# Danh sách dự phòng khi search_service không dựng được index từ vnstock.
 POPULAR_STOCKS = [
     {"symbol": "FPT", "name": "Công ty Cổ phần FPT", "exchange": "HOSE"},
     {"symbol": "HPG", "name": "Tập đoàn Hòa Phát", "exchange": "HOSE"},
@@ -154,26 +177,54 @@ class AnalysisRequest(BaseModel):
     symbol: str
     apiKey: Optional[str] = None
 
+@app.get("/api/health")
+def health():
+    """Healthcheck cho Railway/Render — không gọi API ngoài nên luôn trả nhanh."""
+    return {
+        "status": "ok",
+        "services": {
+            "foreign": _FOREIGN_OK,
+            "sector": _SECTOR_OK,
+            "alerts": _ALERTS_OK,
+            "calendar": _CALENDAR_OK,
+            "insider": _INSIDER_OK,
+            "portfolio_review": _REVIEW_OK,
+            "multitimeframe": _MTF_OK,
+            "search": _SEARCH_OK,
+            "real_portfolio": _REAL_OK,
+            "safety_screen": _SAFETY_OK,
+        },
+    }
+
+
 @app.get("/api/stocks/search")
-def search_stocks(query: Optional[str] = ""):
-    query = query.strip().upper()
-    if not query:
-        return POPULAR_STOCKS
-        
-    results = []
-    for s in POPULAR_STOCKS:
-        if query in s["symbol"] or query in s["name"].upper():
-            results.append(s)
-            
-    # Restrict custom suggestion to exactly 3 uppercase letters (Vietnam format)
-    if not results and len(query) == 3 and query.isalpha():
-        results.append({
-            "symbol": query,
-            "name": f"Cổ phiếu {query}",
-            "exchange": "HOSE / HNX"
-        })
-        
-    return results
+def search_stocks(query: Optional[str] = "", limit: int = 20):
+    """
+    Tìm mã theo ký hiệu, tên doanh nghiệp hoặc ngành trên toàn bộ danh sách niêm yết.
+    """
+    query = (query or "").strip()
+    limit = max(1, min(50, limit))
+
+    if _SEARCH_OK:
+        try:
+            # Index dựng được thì kết quả rỗng nghĩa là KHÔNG có mã nào khớp —
+            # đó là câu trả lời đúng, không được bịa ra mã 3 chữ cái.
+            if get_search_index():
+                return search_symbols(query, limit=limit)
+        except (SystemExit, Exception) as e:
+            print(f"[search] fallback về danh sách tĩnh: {str(e)[:120]}")
+
+    # Fallback: lọc trong danh sách tĩnh.
+    upper = query.upper()
+    if not upper:
+        return POPULAR_STOCKS[:limit]
+
+    results = [s for s in POPULAR_STOCKS if upper in s["symbol"] or upper in s["name"].upper()]
+    # Mã VN đúng 3 chữ cái thì cho gợi ý dù không có trong danh sách tĩnh —
+    # người dùng vẫn xem được biểu đồ nếu mã có thật.
+    if not results and is_vn_stock(upper):
+        results.append({"symbol": upper, "name": f"Cổ phiếu {upper}", "exchange": "HOSE / HNX"})
+    return results[:limit]
 
 @app.get("/api/market/status")
 def get_market_status():
@@ -195,7 +246,12 @@ def get_fundamentals(symbol: str):
     symbol = symbol.strip().upper()
     if not is_vn_stock(symbol):
         raise HTTPException(status_code=400, detail="Chỉ hỗ trợ mã chứng khoán Việt Nam (3 ký tự).")
-    return fetch_fundamentals(symbol)
+    data = fetch_fundamentals(symbol)
+    # Giải thích đi kèm luôn trong payload thay vì thành endpoint riêng: nó chỉ là
+    # cách đọc của chính những con số này, tách ra thì UI phải chờ hai lần mạng để
+    # hiện một panel.
+    data["explain"] = explain_for_symbol(symbol, data)
+    return data
 
 
 @app.get("/api/news")
@@ -208,27 +264,6 @@ def get_news(symbol: str, limit: int = 5):
     return {"symbol": symbol, "count": len(items), "items": items}
 
 
-class BacktestRequest(BaseModel):
-    symbol: str
-    strategy: str = "ema_cross"
-    period: str = "1y"
-    initial_capital: float = 100_000_000
-
-
-class BatchBacktestRequest(BaseModel):
-    symbols: Optional[List[str]] = None  # None = mặc định VN30
-    strategy: str = "ema_cross"
-    period: str = "1y"
-    initial_capital: float = 100_000_000
-
-
-class TradeRequest(BaseModel):
-    symbol: str
-    shares: int
-    price: float
-    executor: str = "USER"
-
-
 class NewsSearchRequest(BaseModel):
     query: str
     top_k: int = 5
@@ -236,57 +271,9 @@ class NewsSearchRequest(BaseModel):
     symbols: Optional[List[str]] = None
 
 
-@app.get("/api/portfolio")
-def api_get_portfolio():
-    return {
-        "portfolio": get_portfolio(),
-        "transactions": get_transactions(limit=200),
-    }
-
-
-@app.post("/api/portfolio/buy")
-def api_buy(req: TradeRequest):
-    if req.shares <= 0 or req.price <= 0:
-        raise HTTPException(status_code=400, detail="Số lượng và giá phải > 0.")
-    if not is_vn_stock(req.symbol.strip().upper()):
-        raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
-    result = record_buy(req.symbol.strip().upper(), req.shares, req.price, req.executor)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Lệnh thất bại"))
-    return {"portfolio": result["portfolio"], "transactions": get_transactions(limit=200)}
-
-
-@app.post("/api/portfolio/sell")
-def api_sell(req: TradeRequest):
-    if req.shares <= 0 or req.price <= 0:
-        raise HTTPException(status_code=400, detail="Số lượng và giá phải > 0.")
-    if not is_vn_stock(req.symbol.strip().upper()):
-        raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
-    result = record_sell(req.symbol.strip().upper(), req.shares, req.price, req.executor)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Lệnh thất bại"))
-    return {"portfolio": result["portfolio"], "transactions": get_transactions(limit=200)}
-
-
-@app.post("/api/portfolio/reset")
-def api_reset():
-    return {"portfolio": reset_portfolio(), "transactions": []}
-
-
 @app.get("/api/vn30")
 def api_vn30():
     return {"symbols": VN30_SYMBOLS}
-
-
-@app.post("/api/backtest/batch")
-def api_backtest_batch(req: BatchBacktestRequest):
-    symbols = req.symbols or VN30_SYMBOLS
-    return run_batch_backtest(
-        symbols=symbols,
-        strategy=req.strategy,
-        period=req.period,
-        initial_capital=req.initial_capital,
-    )
 
 
 @app.post("/api/news/search")
@@ -299,24 +286,6 @@ def api_news_search(req: NewsSearchRequest):
         api_key=req.apiKey,
         symbol_filter=req.symbols,
     )
-
-
-@app.post("/api/backtest")
-def backtest(req: BacktestRequest):
-    symbol = req.symbol.strip().upper()
-    if not is_vn_stock(symbol):
-        raise HTTPException(status_code=400, detail="Chỉ hỗ trợ mã chứng khoán Việt Nam (3 ký tự).")
-    try:
-        return run_backtest(
-            symbol=symbol,
-            strategy=req.strategy,
-            period=req.period,
-            initial_capital=req.initial_capital,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi backtest: {str(e)}")
 
 
 @app.get("/api/stocks/historical")
@@ -357,14 +326,16 @@ def analyze_stock(req: AnalysisRequest, mtf: bool = Query(False, description="In
 
         latest_row = df.iloc[-1]
 
+        # nan_safe_float trả None thay vì NaN: mã mới niêm yết chưa đủ 200 phiên thì EMA200
+        # là NaN, mà NaN không phải JSON hợp lệ (và không nên đưa vào prompt AI).
         indicators = {
-            "rsi": float(latest_row["RSI"]),
-            "macd": float(latest_row["MACD"]),
-            "signal": float(latest_row["MACD_Signal"]),
-            "hist": float(latest_row["MACD_Hist"]),
-            "ema20": float(latest_row["EMA20"]),
-            "ema50": float(latest_row["EMA50"]),
-            "ema200": float(latest_row["EMA200"])
+            "rsi": nan_safe_float(latest_row["RSI"]),
+            "macd": nan_safe_float(latest_row["MACD"]),
+            "signal": nan_safe_float(latest_row["MACD_Signal"]),
+            "hist": nan_safe_float(latest_row["MACD_Hist"]),
+            "ema20": nan_safe_float(latest_row["EMA20"]),
+            "ema50": nan_safe_float(latest_row["EMA50"]),
+            "ema200": nan_safe_float(latest_row["EMA200"]),
         }
 
         last_5 = df.tail(5)
@@ -425,6 +396,17 @@ def analyze_stock(req: AnalysisRequest, mtf: bool = Query(False, description="In
             "news": news_items,
             "analysis": analysis_result,
         }
+        # Ghi lại khuyến nghị để rule "AI đổi tín hiệu" có cái mà so sánh.
+        # Best-effort: lỗi ở đây không được làm hỏng kết quả phân tích.
+        if _ALERTS_OK and isinstance(analysis_result, dict):
+            recommendation = analysis_result.get("recommendation")
+            if recommendation:
+                try:
+                    response_signal = update_ai_signal(symbol, str(recommendation))
+                    response["ai_signal"] = response_signal
+                except Exception as se:
+                    print(f"[analyze] update_ai_signal failed for {symbol}: {se}")
+
         if foreign_data is not None:
             response["foreign"] = foreign_data
         if mtf_data is not None:
@@ -449,10 +431,14 @@ def chat(req: ChatRequest):
         latest = df.iloc[-1]
         intraday_summary = fetch_intraday_summary(symbol)
         
+        def _fmt(key, prec=2):
+            value = nan_safe_float(latest[key])
+            return f"{value:.{prec}f}" if value is not None else "N/A"
+
         summary = (
             f"Cổ phiếu {symbol} ({formatted_symbol}) đang giao dịch ở giá {latest['Close']:.2f}. "
-            f"Các chỉ số kỹ thuật hiện tại: RSI(14)={latest['RSI']:.2f}, MACD={latest['MACD']:.4f}, "
-            f"EMA20={latest['EMA20']:.2f}, EMA50={latest['EMA50']:.2f}.\n"
+            f"Các chỉ số kỹ thuật hiện tại: RSI(14)={_fmt('RSI')}, MACD={_fmt('MACD', 4)}, "
+            f"EMA20={_fmt('EMA20')}, EMA50={_fmt('EMA50')}.\n"
             f"{intraday_summary}"
         )
         
@@ -495,11 +481,14 @@ if _FOREIGN_OK:
             symbol = symbol.strip().upper()
             if not is_vn_stock(symbol):
                 raise HTTPException(status_code=400, detail="Chỉ hỗ trợ mã chứng khoán Việt Nam (3 ký tự).")
-            return fetch_foreign_trade_for_symbol(symbol)
+            data = fetch_foreign_trade_for_symbol(symbol)
+            if data is None:
+                return {"symbol": symbol, "available": False, "reason": "Không có dữ liệu khối ngoại cho mã này."}
+            return data
         except HTTPException:
             raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Lỗi dữ liệu khối ngoại: {str(e)}")
+        except (SystemExit, Exception) as e:
+            return {"symbol": symbol, "available": False, "reason": f"Lỗi dữ liệu khối ngoại: {str(e)[:120]}"}
 
 
 # ---- Sector heatmap + VN100 ----
@@ -529,44 +518,6 @@ if _SECTOR_OK:
             raise
         except (SystemExit, Exception):
             return {"symbols": _VN30_FALLBACK, "fallback": True}
-
-
-# ---- Scanner ----
-class ScannerRequest(BaseModel):
-    universe: Optional[List[str]] = None
-    strategy: Optional[str] = "all"
-    apiKey: Optional[str] = None
-
-
-if _SCANNER_OK:
-    @app.post("/api/scanner/scan")
-    def api_scanner_scan(req: ScannerRequest):
-        try:
-            universe = req.universe
-            # Default universe: VN30 if sector_service is available, else hard-coded
-            if not universe:
-                if _SECTOR_OK:
-                    try:
-                        universe = get_vn30_symbols()
-                    except Exception:
-                        universe = VN30_SYMBOLS
-                else:
-                    universe = VN30_SYMBOLS
-            return scan_universe(
-                symbols=universe,
-                strategy_filter=req.strategy or "all",
-                api_key=req.apiKey,
-            )
-        except HTTPException:
-            raise
-        except TypeError:
-            # Fallback if scan_universe signature differs (defensive)
-            try:
-                return scan_universe(universe)  # type: ignore[arg-type]
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Lỗi quét: {str(e)}")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Lỗi quét: {str(e)}")
 
 
 # ---- Alerts ----
@@ -605,6 +556,58 @@ if _ALERTS_OK:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Lỗi tạo cảnh báo: {str(e)}")
 
+    # Khai báo TRƯỚC /api/alerts/{alert_id}: FastAPI khớp route theo thứ tự, để
+    # sau thì 'watch-portfolio' bị nuốt thành alert_id và trả 405.
+    @app.post("/api/alerts/watch-portfolio")
+    def api_watch_portfolio_news():
+        """
+        Bật cảnh báo "có tin mới" cho toàn bộ mã đang nắm trong danh mục thật.
+
+        Người mới thường không biết mình cần theo dõi cái gì, mà tin doanh nghiệp
+        lại là thứ ảnh hưởng trực tiếp tới tiền họ đang bỏ ra. Một nút bấm là đủ,
+        không bắt họ tự tạo từng rule một.
+        """
+        # Endpoint này nằm trong khối alerts nhưng đọc danh mục thật, mà hai module
+        # bật/tắt độc lập nhau.
+        if not _REAL_OK:
+            raise HTTPException(status_code=503, detail="Danh mục thật chưa khả dụng.")
+        try:
+            portfolio = get_real_portfolio()
+            symbols = [
+                p["symbol"]
+                for p in (portfolio.get("positions") or [])
+                if p.get("symbol") and (p.get("shares") or 0) > 0
+            ]
+            if not symbols:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Danh mục thật đang trống — nhập sao kê giao dịch trước đã.",
+                )
+
+            # Đã có rule đang theo dõi thì bỏ qua, tránh mỗi lần bấm lại đẻ thêm
+            # một rule trùng rồi bắn cùng một tin nhiều lần.
+            watched = {
+                a["symbol"]
+                for a in list_alerts()
+                if a.get("condition") == "news_new" and a.get("active")
+            }
+            created = []
+            for symbol in symbols:
+                if symbol in watched:
+                    continue
+                created.append(create_alert(symbol=symbol, condition="news_new", threshold=0.0))
+
+            return {
+                "created": created,
+                "created_count": len(created),
+                "skipped": sorted(watched & set(symbols)),
+                "symbols": symbols,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi bật theo dõi tin: {str(e)}")
+
     @app.delete("/api/alerts/{alert_id}")
     def api_delete_alert(alert_id: str):
         try:
@@ -635,14 +638,11 @@ if _CALENDAR_OK:
         try:
             sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
             if not sym_list:
-                # Fallback to portfolio holdings if no symbols passed
+                # Không truyền mã -> lấy các mã trong danh mục THẬT của người dùng.
                 try:
-                    pf = get_portfolio() or {}
-                    holdings = pf.get("holdings") or pf.get("positions") or []
-                    if isinstance(holdings, dict):
-                        sym_list = list(holdings.keys())
-                    else:
-                        sym_list = [h.get("symbol") for h in holdings if isinstance(h, dict) and h.get("symbol")]
+                    if _REAL_OK:
+                        data = get_real_portfolio(include_prices=False)
+                        sym_list = [p["symbol"] for p in data.get("positions", [])]
                 except Exception:
                     sym_list = []
             sym_list = [s for s in sym_list if is_vn_stock(s)]
@@ -680,12 +680,9 @@ if _INSIDER_OK:
             if not is_vn_stock(symbol):
                 raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
             days = max(1, min(365, days))
-            # get_insider_deals(symbol, last_n=20) — interpret `days` as a window hint.
-            # Pass last_n generously; service-level filtering by date is best-effort.
-            try:
-                return {"symbol": symbol, "days": days, "deals": get_insider_deals(symbol, last_n=50)}
-            except TypeError:
-                return {"symbol": symbol, "days": days, "deals": get_insider_deals(symbol)}  # type: ignore[call-arg]
+            # get_insider_report gộp sẵn deals + summary + nhãn kỳ, khớp đúng
+            # shape mà InsiderPanel đọc.
+            return get_insider_report(symbol, days=days, last_n=50)
         except HTTPException:
             raise
         except (SystemExit, Exception) as e:
@@ -723,6 +720,207 @@ if _MTF_OK:
             raise HTTPException(status_code=500, detail=f"Lỗi đa khung thời gian: {str(e)}")
 
 
+# ===========================================================================
+# Danh mục THẬT
+#
+# Tách hẳn khỏi /api/portfolio (giả lập). Ở đây không có nút đặt lệnh: app chỉ
+# GHI NHẬN những gì đã khớp ở công ty chứng khoán, không kết nối để mua bán hộ.
+# ===========================================================================
+
+class ManualTxnRequest(BaseModel):
+    date: str
+    symbol: str
+    side: str
+    quantity: int
+    price: float
+    fee: Optional[float] = None
+    tax: Optional[float] = None
+    note: Optional[str] = ""
+
+
+if _REAL_OK:
+    # Sao kê cá nhân hiếm khi quá vài trăm KB; chặn sớm để không ôm file lớn
+    # vào RAM của dyno free tier.
+    MAX_IMPORT_BYTES = 5 * 1024 * 1024
+
+    @app.post("/api/real/import")
+    async def api_real_import(
+        file: UploadFile = File(...),
+        fee_rate: float = Query(DEFAULT_BROKER_FEE_RATE, ge=0, le=0.01),
+        dry_run: bool = Query(False, description="Chỉ xem trước, không ghi vào sổ"),
+    ):
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="File rỗng.")
+        if len(content) > MAX_IMPORT_BYTES:
+            raise HTTPException(status_code=400, detail="File quá lớn (giới hạn 5 MB).")
+
+        try:
+            parsed = parse_broker_csv(content, filename=file.filename or "", fee_rate=fee_rate)
+        except ImportError_ as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Không đọc được file: {str(e)[:200]}")
+
+        records = parsed["records"]
+        result = {
+            "parsed": len(records),
+            "skipped_rows": parsed["skipped"][:20],
+            "skipped_count": len(parsed["skipped"]),
+            "detected_columns": parsed["detected_columns"],
+            "fee_from_file": parsed["fee_from_file"],
+            "fee_rate_used": parsed["fee_rate_used"],
+            "preview": records[:10],
+            "dry_run": dry_run,
+        }
+
+        if dry_run or not records:
+            result["inserted"] = 0
+            result["duplicates"] = 0
+            return result
+
+        written = insert_real_transactions(records)
+        result["inserted"] = written["inserted"]
+        result["duplicates"] = written["skipped"]
+        return result
+
+    @app.get("/api/real/portfolio")
+    def api_real_portfolio(prices: bool = True):
+        try:
+            return get_real_portfolio(include_prices=prices)
+        except HTTPException:
+            raise
+        except (SystemExit, Exception) as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi dựng danh mục: {str(e)[:200]}")
+
+    @app.get("/api/real/transactions")
+    def api_real_transactions(symbol: Optional[str] = None):
+        sym = symbol.strip().upper() if symbol else None
+        return {"transactions": list_real_transactions(sym)}
+
+    @app.post("/api/real/transactions")
+    def api_real_add_transaction(req: ManualTxnRequest):
+        try:
+            record = build_manual_record(
+                date=req.date,
+                symbol=req.symbol,
+                side=req.side,
+                quantity=req.quantity,
+                price=req.price,
+                fee=req.fee,
+                tax=req.tax,
+                note=req.note or "",
+            )
+        except ImportError_ as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        written = insert_real_transactions([record])
+        if written["inserted"] == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Giao dịch này đã có trong sổ (trùng ngày, mã, loại lệnh, khối lượng và giá).",
+            )
+        return {"ok": True, "transaction": record}
+
+    @app.delete("/api/real/transactions/{txn_id}")
+    def api_real_delete_transaction(txn_id: str):
+        if not delete_real_transaction(txn_id):
+            raise HTTPException(status_code=404, detail="Không tìm thấy giao dịch.")
+        return {"ok": True, "id": txn_id}
+
+    @app.post("/api/real/reset")
+    def api_real_reset(confirm: bool = Query(False)):
+        # Xoá sổ giao dịch thật là không hoàn tác được -> bắt buộc confirm rõ ràng.
+        if not confirm:
+            raise HTTPException(
+                status_code=400,
+                detail="Cần confirm=true. Thao tác này xoá toàn bộ sổ giao dịch thật và không hoàn tác được.",
+            )
+        return {"ok": True, "deleted": clear_real_transactions()}
+
+    @app.get("/api/real/stats")
+    def api_real_stats(year: Optional[int] = None):
+        try:
+            return get_trading_stats(year=year)
+        except (SystemExit, Exception) as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi thống kê: {str(e)[:200]}")
+
+
+# ===========================================================================
+# Bộ lọc an toàn
+#
+# Không tìm mã tốt — chặn mã nguy hiểm. Toàn bộ tiêu chí là ngưỡng số công khai
+# trong safety_screen.py, không dùng AI, không chấm điểm tổng.
+# ===========================================================================
+
+class SafetyScreenRequest(BaseModel):
+    symbols: Optional[List[str]] = None
+
+
+if _SAFETY_OK:
+    @app.get("/api/safety")
+    def api_safety_one(symbol: str):
+        symbol = symbol.strip().upper()
+        if not is_vn_stock(symbol):
+            raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
+        try:
+            return screen_many([symbol])["results"][0]
+        except (SystemExit, Exception) as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi kiểm tra an toàn: {str(e)[:200]}")
+
+    @app.post("/api/safety/screen")
+    def api_safety_screen(req: SafetyScreenRequest):
+        symbols = req.symbols
+        if not symbols:
+            # Không truyền mã -> kiểm tra chính danh mục thật của người dùng.
+            symbols = []
+            if _REAL_OK:
+                try:
+                    data = get_real_portfolio(include_prices=False)
+                    symbols = [p["symbol"] for p in data.get("positions", [])]
+                except Exception:
+                    symbols = []
+            if not symbols:
+                symbols = VN30_SYMBOLS[:8]
+
+        symbols = [s.strip().upper() for s in symbols if s and is_vn_stock(s.strip().upper())]
+        if not symbols:
+            raise HTTPException(status_code=400, detail="Không có mã hợp lệ nào.")
+        try:
+            return screen_many(symbols)
+        except (SystemExit, Exception) as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi quét: {str(e)[:200]}")
+
+
+# ===========================================================================
+# Bản tin hằng ngày
+#
+# Chỉ ĐỌC từ DB. Nội dung do job nền (jobs/daily_brief.py) sinh ra bằng
+# Antigravity CLI trên máy người dùng — app web không gọi AI, nên mở lên là có
+# ngay và deploy được ở nơi không có quyền truy cập tài khoản AI.
+# ===========================================================================
+
+@app.get("/api/brief")
+def api_brief(date: Optional[str] = None):
+    brief = get_daily_brief(date)
+    if brief is None:
+        return {
+            "available": False,
+            "reason": (
+                "Chưa có bản tin nào. Chạy `python -m jobs.daily_brief` trong thư mục "
+                "backend, hoặc đặt lịch chạy tự động mỗi sáng."
+            ),
+            "dates": list_brief_dates(limit=10),
+        }
+    brief["available"] = True
+    return brief
+
+
+@app.get("/api/brief/dates")
+def api_brief_dates(limit: int = 30):
+    return {"dates": list_brief_dates(limit=max(1, min(180, limit)))}
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8765, reload=True)  # 8765 = API_BASE mặc định của frontend

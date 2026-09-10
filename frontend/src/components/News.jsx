@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Newspaper, ExternalLink, Search } from 'lucide-react';
 
 export default function News({ items, symbol, apiBase, apiKey }) {
@@ -53,7 +53,7 @@ export default function News({ items, symbol, apiBase, apiKey }) {
           <Search size={12} className="news-search-icon" />
           <input
             type="text"
-            placeholder="Tìm theo ngữ nghĩa: 'kết quả kinh doanh quý 3', 'tăng vốn'..."
+            placeholder="Tìm tin: 'kết quả kinh doanh quý 3', 'tăng vốn'..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -66,6 +66,9 @@ export default function News({ items, symbol, apiBase, apiKey }) {
           )}
         </form>
         {searchError ? <div className="news-error">{searchError}</div> : null}
+        {isSearchMode && searchResults?.note ? (
+          <div className="news-note">{searchResults.note}</div>
+        ) : null}
         {!displayItems || displayItems.length === 0 ? (
           <div className="news-empty">
             {isSearchMode ? 'Không tìm thấy tin nào khớp.' : 'Chưa có tin tức nổi bật cho mã này.'}
@@ -237,6 +240,12 @@ export default function News({ items, symbol, apiBase, apiKey }) {
           cursor: pointer;
         }
         .news-search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .news-note {
+          font-size: 10px;
+          line-height: 1.4;
+          color: var(--text-muted);
+          padding: 4px 2px;
+        }
         .news-error {
           background: rgba(244, 63, 94, 0.1);
           border: 1px solid rgba(244, 63, 94, 0.3);

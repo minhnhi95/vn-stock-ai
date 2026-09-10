@@ -2,7 +2,7 @@
 AI Portfolio Review — phân tích sức khỏe toàn bộ danh mục thay vì 1 mã đơn lẻ.
 
 Quy trình:
-1. Đọc portfolio hiện tại từ storage_service.get_portfolio()
+1. Đọc danh mục thật từ real_portfolio_service.get_real_portfolio()
 2. Với mỗi holding: fetch giá thời gian thực + chỉ báo kỹ thuật + sector lookup
 3. Tính các metric rủi ro:
    - Concentration: 1 mã > 30% NAV
@@ -114,7 +114,7 @@ def _lookup_sector_vnstock(symbol: str) -> Optional[str]:
     if not HAS_VNSTOCK:
         return None
     # Path 1: Company overview — nhanh nhất
-    for src in ("VCI", "TCBS"):
+    for src in ("VCI", "KBS"):
         try:
             c = Company(symbol=symbol, source=src)
             if hasattr(c, "overview"):
@@ -562,23 +562,59 @@ def _heuristic_review(metrics: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _real_portfolio_as_holdings() -> Dict[str, Any]:
+    """
+    Đưa danh mục THẬT về đúng shape mà _compute_metrics đang dùng.
+
+    Danh mục thật không có khái niệm "tiền mặt" (app không biết số dư tài khoản
+    của người dùng), nên cash = 0 và mọi phân tích chỉ dựa trên phần cổ phiếu.
+    """
+    from real_portfolio_service import get_real_portfolio
+
+    data = get_real_portfolio(include_prices=True)
+    if data.get("empty"):
+        return {"holdings": [], "cash": 0.0, "initial_capital": 0.0}
+
+    holdings = []
+    for position in data.get("positions", []):
+        if not position.get("price_available"):
+            continue
+        holdings.append(
+            {
+                "symbol": position["symbol"],
+                "shares": position["shares"],
+                "avgPrice": position["avg_cost"],
+                "currentPrice": position["price"],
+            }
+        )
+    total_cost = sum(h["shares"] * h["avgPrice"] for h in holdings)
+    return {"holdings": holdings, "cash": 0.0, "initial_capital": total_cost}
+
+
 def review_portfolio(api_key: Optional[str] = None) -> Dict[str, Any]:
     """
-    Phân tích sức khỏe toàn danh mục và trả về khuyến nghị tái cơ cấu.
+    Phân tích sức khỏe danh mục THẬT và trả về cảnh báo rủi ro.
 
     Args:
         api_key: Gemini API key. Nếu None/empty, fallback heuristic rule-based.
 
     Returns:
-        Dict: {empty: true} nếu không có holding, hoặc structured review.
+        Dict: {empty: true} nếu chưa có vị thế, hoặc structured review.
     """
-    portfolio = storage_service.get_portfolio()
+    source = "real"
+    portfolio = _real_portfolio_as_holdings()
+    empty_reason = (
+        "Danh mục chưa có vị thế nào (hoặc chưa lấy được giá) — "
+        "nhập sao kê giao dịch trước khi đánh giá."
+    )
+
     holdings = portfolio.get("holdings", [])
 
     if not holdings:
         return {
             "empty": True,
-            "reason": "Danh mục chưa có cổ phiếu nào — chưa thể đánh giá.",
+            "portfolio_source": source,
+            "reason": empty_reason,
             "cash": portfolio.get("cash"),
             "initial_capital": portfolio.get("initial_capital"),
         }
@@ -586,12 +622,13 @@ def review_portfolio(api_key: Optional[str] = None) -> Dict[str, Any]:
     # Cache key bao gồm danh sách mã + tỷ trọng (xấp xỉ qua shares) — nếu portfolio
     # đổi (mua/bán) thì cache key đổi → tự invalidate.
     holdings_sig = "|".join(f"{h['symbol']}:{h.get('shares', 0)}" for h in sorted(holdings, key=lambda x: x["symbol"]))
-    cache_key = f"review:{holdings_sig}:{portfolio.get('cash', 0):.0f}"
+    cache_key = f"review:{source}:{holdings_sig}:{portfolio.get('cash', 0):.0f}"
     cached = _cache.get(cache_key)
     if cached is not None:
         return {**cached, "cached": True}
 
     metrics = _compute_metrics(portfolio)
+    metrics["portfolio_source"] = source
 
     active_key = (api_key or os.getenv("GEMINI_API_KEY") or "").strip()
 
@@ -599,6 +636,7 @@ def review_portfolio(api_key: Optional[str] = None) -> Dict[str, Any]:
     if not active_key or not HAS_GENAI:
         result = _heuristic_review(metrics)
         result["metrics"] = metrics
+        result["portfolio_source"] = source
         result["cached"] = False
         _cache.set(cache_key, result, REVIEW_TTL_SECONDS)
         return result
@@ -618,6 +656,7 @@ def review_portfolio(api_key: Optional[str] = None) -> Dict[str, Any]:
             **parsed,
             "metrics": metrics,
             "source": "gemini",
+            "portfolio_source": source,
             "cached": False,
         }
         _cache.set(cache_key, result, REVIEW_TTL_SECONDS)

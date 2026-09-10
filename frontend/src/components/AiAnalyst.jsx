@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Cpu, Send, TrendingUp, ShieldAlert, Award, MessageSquare, BookOpen, Newspaper, AlertTriangle } from 'lucide-react';
 
 const ERROR_LABELS = {

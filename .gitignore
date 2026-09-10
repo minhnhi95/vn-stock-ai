@@ -12,6 +12,9 @@ backend/.env
 frontend/.env
 frontend/.env.local
 
+# File tam cua jobs/sector_benchmarks.py khi bi ngat giua chung
+backend/data/*.tmp
+
 # Local DB
 backend/data.db
 backend/data.db-journal
@@ -35,3 +38,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Pytest
+.pytest_cache/

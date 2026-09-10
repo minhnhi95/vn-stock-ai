@@ -257,7 +257,7 @@ def _fetch_hourly(symbol: str) -> Dict[str, Any]:
 
     # Thử nhiều source vì interval='1H' có thể không đồng nhất giữa provider.
     last_error = None
-    for source in ("VCI", "KBS", "TCBS"):
+    for source in ("VCI", "KBS"):
         try:
             q = Quote(symbol=symbol, source=source)
             df_raw = q.history(start=start_str, end=end_str, interval='1H')

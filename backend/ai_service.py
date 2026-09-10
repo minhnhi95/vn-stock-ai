@@ -6,13 +6,14 @@ import os
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
-def _build_analysis_prompt(symbol, current_price, indicators, history_summary, intraday_summary, fundamentals_summary="", news_summary=""):
+def _build_analysis_prompt(symbol, current_price, indicators, history_summary, intraday_summary, fundamentals_summary="", news_summary="", extra_context=""):
     def fmt(key, prec):
         v = indicators.get(key)
         return f"{v:.{prec}f}" if isinstance(v, (int, float)) else "N/A"
 
     fundamentals_block = fundamentals_summary or "Dữ liệu cơ bản: Không khả dụng."
     news_block = news_summary or "Tin tức: Không có tin nổi bật."
+    extra_block = extra_context or "Không có dữ liệu bổ sung."
 
     return f"""
     Bạn là Chuyên gia phân tích kỹ thuật + cơ bản + bối cảnh tin tức (technical + fundamental + sentiment) cấp cao tại thị trường chứng khoán Việt Nam.
@@ -39,6 +40,9 @@ def _build_analysis_prompt(symbol, current_price, indicators, history_summary, i
 
     [3] TIN TỨC & BỐI CẢNH
     {news_block}
+
+    [4] BỐI CẢNH BỔ SUNG
+    {extra_block}
 
     HƯỚNG DẪN:
     - Kỹ thuật xác định ĐIỂM VÀO/RA ngắn hạn.
@@ -98,15 +102,22 @@ def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history
             "error": "missing_api_key",
         }
 
-    prompt = _build_analysis_prompt(symbol, current_price, indicators, history_summary, intraday_summary, fundamentals_summary, news_summary)
-    # Append Phase 2 context blocks if provided (foreign flow + multi-timeframe)
     extra_blocks = []
     if foreign_summary:
         extra_blocks.append("LUỒNG TIỀN KHỐI NGOẠI (Foreign trade):\n" + foreign_summary)
     if mtf_summary:
         extra_blocks.append("PHÂN TÍCH ĐA KHUNG THỜI GIAN (Multi-timeframe):\n" + mtf_summary)
-    if extra_blocks:
-        prompt = prompt + "\n\n" + "\n\n".join(extra_blocks)
+
+    prompt = _build_analysis_prompt(
+        symbol,
+        current_price,
+        indicators,
+        history_summary,
+        intraday_summary,
+        fundamentals_summary,
+        news_summary,
+        extra_context="\n\n".join(extra_blocks),
+    )
 
     structured_error = None
     try:

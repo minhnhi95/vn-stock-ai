@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="VN Stock AI Analyzer">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1226"/>
+      <stop offset="1" stop-color="#040815"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#bg)"/>
+
+  <!-- Đường xu hướng đi lên: đọc được ngay cả ở 48px -->
+  <path d="M84 348 L196 244 L288 300 L428 140"
+        fill="none" stroke="#06b6d4" stroke-width="22"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+
+  <!-- Nến: 2 xanh (tăng) xen 1 đỏ (giảm), bố cục quen thuộc với dân chứng khoán -->
+  <g stroke-linecap="round">
+    <g stroke="#22c55e" fill="#22c55e">
+      <line x1="152" y1="196" x2="152" y2="392" stroke-width="16"/>
+      <rect x="126" y="232" width="52" height="128" rx="12"/>
+    </g>
+    <g stroke="#f43f5e" fill="#f43f5e">
+      <line x1="256" y1="236" x2="256" y2="420" stroke-width="16"/>
+      <rect x="230" y="276" width="52" height="112" rx="12"/>
+    </g>
+    <g stroke="#22c55e" fill="#22c55e">
+      <line x1="360" y1="112" x2="360" y2="348" stroke-width="16"/>
+      <rect x="334" y="148" width="52" height="160" rx="12"/>
+    </g>
+  </g>
+</svg>

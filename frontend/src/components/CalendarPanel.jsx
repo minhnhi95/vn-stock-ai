@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Calendar, Coins, CalendarClock, RefreshCw } from 'lucide-react';
 
 const fmtDate = (s) => {
@@ -29,20 +29,33 @@ const daysUntil = (s) => {
 
 const dayBadgeTone = (n) => {
   if (n === null || n === undefined) return '';
+  if (n < 0) return 'past';
   if (n <= 3) return 'urgent';
   if (n <= 7) return 'soon';
   return 'normal';
 };
 
-const fmtRate = (rate, type) => {
-  if (rate === null || rate === undefined || rate === '') return 'N/A';
-  const num = Number(rate);
-  if (Number.isNaN(num)) return String(rate);
-  // tiền: nghìn đồng/cổ phiếu, cổ phiếu: tỷ lệ %
-  if (type === 'stock' || type === 'co_phieu') {
-    return `${num.toFixed(2)}%`;
+// Sự kiện đã diễn ra vẫn được hiển thị (doanh nghiệp VN công bố sát ngày nên
+// danh sách "sắp tới" thường rỗng), nên nhãn phải phân biệt rõ quá khứ/tương lai.
+const dayBadgeText = (n) => {
+  if (n === null || n === undefined) return '';
+  if (n === 0) return 'Hôm nay';
+  if (n < 0) return `${Math.abs(n)}n trước`;
+  return `${n}n nữa`;
+};
+
+const fmtRate = (item) => {
+  // Cổ tức tiền mặt -> `rate` (VND/cp). Cổ phiếu thưởng/phát hành thêm -> `ratio`
+  // (0.1 = 10%). Một sự kiện chỉ có một trong hai.
+  const rate = item?.rate;
+  if (rate !== null && rate !== undefined && rate !== '' && !Number.isNaN(Number(rate))) {
+    return `${Number(rate).toLocaleString('vi-VN')} đ/cp`;
   }
-  return `${num.toLocaleString('vi-VN')} đ`;
+  const ratio = item?.ratio;
+  if (ratio !== null && ratio !== undefined && !Number.isNaN(Number(ratio))) {
+    return `${(Number(ratio) * 100).toFixed(2)}%`;
+  }
+  return 'N/A';
 };
 
 const typeLabel = (t) => {
@@ -130,7 +143,7 @@ export default function CalendarPanel({ apiBase, watchlistSymbols = [] }) {
       <div className="panel-header">
         <div className="panel-title">
           <Calendar size={16} className="text-accent" />
-          <span>Lịch sự kiện 30 ngày</span>
+          <span>Lịch sự kiện doanh nghiệp</span>
         </div>
         <button className="cal-refresh" onClick={fetchCalendar} disabled={loading} title="Tải lại">
           <RefreshCw size={12} className={loading ? 'spin' : ''} />
@@ -140,14 +153,14 @@ export default function CalendarPanel({ apiBase, watchlistSymbols = [] }) {
         {error ? <div className="cal-error">{error}</div> : null}
 
         {!hasAny && !loading && !error ? (
-          <div className="cal-empty">Không có sự kiện sắp tới</div>
+          <div className="cal-empty">Không có sự kiện nào trong khoảng theo dõi</div>
         ) : null}
 
         {dividends.length > 0 ? (
           <div className="cal-section">
             <div className="cal-section-title">
               <Coins size={12} />
-              <span>Sắp chia cổ tức</span>
+              <span>Cổ tức & phát hành</span>
               <span className="cal-count">{dividends.length}</span>
             </div>
             <div className="cal-list">
@@ -160,10 +173,12 @@ export default function CalendarPanel({ apiBase, watchlistSymbols = [] }) {
                     <span className="cal-symbol">{d.symbol}</span>
                     <span className="cal-date">
                       {fmtDate(date)}
-                      {dn !== null ? <span className={`cal-daybadge ${tone}`}>T-{dn}</span> : null}
+                      {dn !== null ? (
+                        <span className={`cal-daybadge ${tone}`}>{dayBadgeText(dn)}</span>
+                      ) : null}
                     </span>
-                    <span className="cal-rate">{fmtRate(d.rate, d.type)}</span>
-                    <span className="cal-type">{typeLabel(d.type)}</span>
+                    <span className="cal-rate">{fmtRate(d)}</span>
+                    <span className="cal-type">{typeLabel(d.event_name || d.type)}</span>
                   </div>
                 );
               })}
@@ -175,7 +190,7 @@ export default function CalendarPanel({ apiBase, watchlistSymbols = [] }) {
           <div className="cal-section">
             <div className="cal-section-title">
               <CalendarClock size={12} />
-              <span>Sự kiện sắp tới</span>
+              <span>Sự kiện doanh nghiệp</span>
               <span className="cal-count">{events.length}</span>
             </div>
             <div className="cal-list">
@@ -188,7 +203,9 @@ export default function CalendarPanel({ apiBase, watchlistSymbols = [] }) {
                     <span className="cal-symbol">{e.symbol}</span>
                     <span className="cal-date">
                       {fmtDate(date)}
-                      {dn !== null ? <span className={`cal-daybadge ${tone}`}>T-{dn}</span> : null}
+                      {dn !== null ? (
+                        <span className={`cal-daybadge ${tone}`}>{dayBadgeText(dn)}</span>
+                      ) : null}
                     </span>
                     <span className="cal-event-tag">{eventLabel(e.event_type)}</span>
                     <span className="cal-desc" title={e.description}>{e.description || '-'}</span>
@@ -315,6 +332,10 @@ export default function CalendarPanel({ apiBase, watchlistSymbols = [] }) {
         .cal-daybadge.soon {
           background: rgba(234, 179, 8, 0.12);
           color: #facc15;
+        }
+        .cal-daybadge.past {
+          background: rgba(148, 163, 184, 0.15);
+          color: var(--text-muted);
         }
         .cal-daybadge.normal {
           background: rgba(148, 163, 184, 0.12);

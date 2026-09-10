@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Bell, BellRing, Trash2, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Bell, BellRing, Trash2, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Newspaper } from 'lucide-react';
 
 const CONDITIONS = [
   { id: 'price_above', label: 'Giá vượt', needsThreshold: true, unit: 'đ', placeholder: 'VD: 80000' },
@@ -9,6 +9,7 @@ const CONDITIONS = [
   { id: 'ema_cross_up', label: 'EMA cắt lên', needsThreshold: false, unit: '', placeholder: '' },
   { id: 'ema_cross_down', label: 'EMA cắt xuống', needsThreshold: false, unit: '', placeholder: '' },
   { id: 'ai_signal_change', label: 'AI đổi tín hiệu', needsThreshold: false, unit: '', placeholder: '' },
+  { id: 'news_new', label: 'Có tin mới', needsThreshold: false, unit: '', placeholder: '' },
 ];
 
 const CONDITION_MAP = CONDITIONS.reduce((acc, c) => {
@@ -33,7 +34,26 @@ const describeAlert = (alert) => {
   return `${cond.label} ${fmtNumber(alert.threshold)}${cond.unit ? ` ${cond.unit}` : ''}`;
 };
 
-export default function AlertsManager({ apiBase }) {
+// Poll thưa khi thị trường đóng: giá không đổi thì check chỉ tốn rate limit của
+// vnstock (20 req/phút, dùng chung với chart và heatmap).
+const CHECK_INTERVAL_OPEN_MS = 60_000;
+const CHECK_INTERVAL_CLOSED_MS = 10 * 60_000;
+
+const notifyTriggered = (triggered) => {
+  if (!triggered.length) return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const names = triggered.map((t) => t.symbol || t.alert?.symbol || '?').join(', ');
+  try {
+    new Notification(`${triggered.length} cảnh báo kích hoạt`, {
+      body: names,
+      tag: 'vn-stock-alert',
+    });
+  } catch {
+    // Một số trình duyệt chặn Notification ngoài ngữ cảnh service worker.
+  }
+};
+
+export default function AlertsManager({ apiBase, marketOpen = false }) {
   const [alerts, setAlerts] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -48,9 +68,21 @@ export default function AlertsManager({ apiBase }) {
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
 
+  // Bật theo dõi tin cho cả danh mục thật (một nút, không phải tạo từng rule).
+  const [watchState, setWatchState] = useState(null);
+  const [isWatching, setIsWatching] = useState(false);
+
   // Check state
   const [isChecking, setIsChecking] = useState(false);
   const [checkResult, setCheckResult] = useState(null);
+  const [autoCheck, setAutoCheck] = useState(() => {
+    try {
+      return localStorage.getItem('alerts_auto_check') !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const [lastCheckedAt, setLastCheckedAt] = useState(null);
 
   const searchTimer = useRef(null);
   const suggestionsBoxRef = useRef(null);
@@ -85,7 +117,7 @@ export default function AlertsManager({ apiBase }) {
     }
     searchTimer.current = setTimeout(async () => {
       try {
-        const res = await fetch(`${apiBase}/stocks/search?q=${encodeURIComponent(q)}`);
+        const res = await fetch(`${apiBase}/stocks/search?query=${encodeURIComponent(q)}`);
         if (!res.ok) return;
         const data = await res.json();
         const list = Array.isArray(data) ? data : data.results || data.items || [];
@@ -158,6 +190,28 @@ export default function AlertsManager({ apiBase }) {
     }
   };
 
+  const watchPortfolioNews = async () => {
+    setIsWatching(true);
+    setWatchState(null);
+    try {
+      const res = await fetch(`${apiBase}/alerts/watch-portfolio`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const added = data.created_count || 0;
+      setWatchState({
+        ok: true,
+        text: added
+          ? `Đã bật theo dõi tin cho ${added} mã: ${data.created.map((c) => c.symbol).join(', ')}`
+          : 'Tất cả mã trong danh mục đã được theo dõi tin từ trước.',
+      });
+      await fetchAlerts();
+    } catch (err) {
+      setWatchState({ ok: false, text: err.message || 'Không bật được theo dõi tin' });
+    } finally {
+      setIsWatching(false);
+    }
+  };
+
   const deleteAlert = async (id) => {
     try {
       const res = await fetch(`${apiBase}/alerts/${id}`, { method: 'DELETE' });
@@ -168,24 +222,73 @@ export default function AlertsManager({ apiBase }) {
     }
   };
 
-  const runCheck = async () => {
-    setIsChecking(true);
-    setCheckResult(null);
+  // silent = lượt tự động: không hiện spinner, và chỉ báo khi thực sự có rule bắn
+  // (nếu không, banner "chưa có cảnh báo nào" sẽ nhấp nháy mỗi phút).
+  const runCheck = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) {
+        setIsChecking(true);
+        setCheckResult(null);
+      }
+      try {
+        const res = await fetch(`${apiBase}/alerts/check`, { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        const triggered = Array.isArray(data) ? data : data.triggered || data.results || [];
+        if (!silent || triggered.length) {
+          setCheckResult({ triggered, raw: data });
+        }
+        if (triggered.length) notifyTriggered(triggered);
+        setLastCheckedAt(Date.now());
+        await fetchAlerts();
+      } catch (err) {
+        if (!silent) setCheckResult({ triggered: [], error: err.message || 'Lỗi khi check' });
+      } finally {
+        if (!silent) setIsChecking(false);
+      }
+    },
+    // fetchAlerts được khai báo lại mỗi render nhưng chỉ đọc apiBase — bỏ khỏi deps
+    // để interval bên dưới không bị dựng lại liên tục.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [apiBase],
+  );
+
+  const toggleAutoCheck = async () => {
+    const next = !autoCheck;
+    setAutoCheck(next);
     try {
-      const res = await fetch(`${apiBase}/alerts/check`, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-      const triggered = Array.isArray(data) ? data : data.triggered || data.results || [];
-      setCheckResult({ triggered, raw: data });
-      await fetchAlerts();
-    } catch (err) {
-      setCheckResult({ triggered: [], error: err.message || 'Lỗi khi check' });
-    } finally {
-      setIsChecking(false);
+      localStorage.setItem('alerts_auto_check', next ? 'on' : 'off');
+    } catch {
+      // localStorage bị chặn — tính năng vẫn chạy trong phiên này.
+    }
+    if (next && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      try {
+        await Notification.requestPermission();
+      } catch {
+        // Người dùng từ chối: cảnh báo vẫn hiện trong panel, chỉ không có popup.
+      }
     }
   };
 
-  const triggeredCount = alerts.filter((a) => a.triggered || a.status === 'triggered').length;
+  // Tự kiểm tra định kỳ. Dừng hẳn khi tab ẩn hoặc không còn rule active.
+  const hasActiveAlerts = alerts.some((a) => a.active !== false);
+  useEffect(() => {
+    if (!autoCheck || !hasActiveAlerts) return undefined;
+
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled || document.hidden) return;
+      runCheck({ silent: true });
+    };
+    const intervalMs = marketOpen ? CHECK_INTERVAL_OPEN_MS : CHECK_INTERVAL_CLOSED_MS;
+    const id = setInterval(tick, intervalMs);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [autoCheck, hasActiveAlerts, marketOpen, runCheck]);
+
+  const triggeredCount = alerts.filter((a) => a.triggered_at || a.active === false).length;
 
   return (
     <div className="glass-panel">
@@ -198,16 +301,30 @@ export default function AlertsManager({ apiBase }) {
             <span className="alert-count-badge triggered">{triggeredCount} kích hoạt</span>
           ) : null}
         </div>
-        <button
-          type="button"
-          className="alert-check-btn"
-          onClick={runCheck}
-          disabled={isChecking || alerts.length === 0}
-          title="Kiểm tra các điều kiện cảnh báo ngay"
-        >
-          <RefreshCw size={11} className={isChecking ? 'spin' : ''} />
-          {isChecking ? 'Đang kiểm...' : 'Check ngay'}
-        </button>
+        <div className="alert-header-actions">
+          <button
+            type="button"
+            className={`alert-auto-toggle ${autoCheck ? 'on' : ''}`}
+            onClick={toggleAutoCheck}
+            title={
+              autoCheck
+                ? `Đang tự kiểm tra mỗi ${marketOpen ? '1 phút' : '10 phút'} khi tab đang mở`
+                : 'Bật tự kiểm tra định kỳ'
+            }
+          >
+            {autoCheck ? 'Tự động: BẬT' : 'Tự động: TẮT'}
+          </button>
+          <button
+            type="button"
+            className="alert-check-btn"
+            onClick={() => runCheck()}
+            disabled={isChecking || alerts.length === 0}
+            title="Kiểm tra các điều kiện cảnh báo ngay"
+          >
+            <RefreshCw size={11} className={isChecking ? 'spin' : ''} />
+            {isChecking ? 'Đang kiểm...' : 'Check ngay'}
+          </button>
+        </div>
       </div>
 
       <div className="panel-content alert-content">
@@ -215,6 +332,18 @@ export default function AlertsManager({ apiBase }) {
           <div className="alert-error-banner">
             <AlertTriangle size={12} />
             <span>{error}</span>
+          </div>
+        ) : null}
+
+        {autoCheck && hasActiveAlerts ? (
+          <div className="alert-auto-status">
+            Tự kiểm tra mỗi {marketOpen ? '1 phút' : '10 phút'}
+            {lastCheckedAt
+              ? ` · lần cuối ${new Date(lastCheckedAt).toLocaleTimeString('vi-VN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}`
+              : ''}
           </div>
         ) : null}
 
@@ -228,13 +357,28 @@ export default function AlertsManager({ apiBase }) {
             ) : checkResult.triggered.length > 0 ? (
               <>
                 <BellRing size={12} />
-                <span>
-                  {checkResult.triggered.length} cảnh báo vừa kích hoạt:{' '}
+                <div className="alert-check-body">
+                  <span>
+                    {checkResult.triggered.length} cảnh báo vừa kích hoạt:{' '}
+                    {checkResult.triggered
+                      .slice(0, 5)
+                      .map((t) => t.symbol || t.alert?.symbol || '?')
+                      .join(', ')}
+                  </span>
+                  {/* Cảnh báo tin mà chỉ hiện tên mã thì người dùng vẫn phải đi mò
+                      xem tin gì — nên in luôn tiêu đề tin đã kích hoạt. */}
                   {checkResult.triggered
-                    .slice(0, 5)
-                    .map((t) => t.symbol || t.alert?.symbol || '?')
-                    .join(', ')}
-                </span>
+                    .filter((t) => t.context?.news?.title)
+                    .slice(0, 3)
+                    .map((t) => (
+                      <span key={t.id} className="alert-check-news">
+                        <Newspaper size={10} />
+                        <span>
+                          <b>{t.symbol}</b> — {t.context.news.title}
+                        </span>
+                      </span>
+                    ))}
+                </div>
               </>
             ) : (
               <>
@@ -245,6 +389,25 @@ export default function AlertsManager({ apiBase }) {
             <button type="button" className="alert-check-dismiss" onClick={() => setCheckResult(null)}>×</button>
           </div>
         ) : null}
+
+        <div className="alert-watch">
+          <button
+            type="button"
+            className="alert-watch-btn"
+            onClick={watchPortfolioNews}
+            disabled={isWatching}
+          >
+            <Newspaper size={12} className={isWatching ? 'spin' : ''} />
+            <span>{isWatching ? 'Đang bật...' : 'Báo tin mới cho danh mục của tôi'}</span>
+          </button>
+          {watchState ? (
+            <span className={`alert-watch-msg ${watchState.ok ? '' : 'err'}`}>{watchState.text}</span>
+          ) : (
+            <span className="alert-watch-msg">
+              Tạo cảnh báo "có tin mới" cho mọi mã bạn đang nắm.
+            </span>
+          )}
+        </div>
 
         {/* Alert list */}
         <div className="alert-list">
@@ -378,6 +541,30 @@ export default function AlertsManager({ apiBase }) {
         .alert-count-badge.triggered {
           background: rgba(244, 63, 94, 0.15);
           color: var(--color-sell);
+        }
+        .alert-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .alert-auto-toggle {
+          font-size: 9px;
+          letter-spacing: 0.4px;
+          padding: 3px 7px;
+          border-radius: 999px;
+          border: 1px solid var(--border-color);
+          background: transparent;
+          color: var(--text-muted);
+          cursor: pointer;
+        }
+        .alert-auto-toggle.on {
+          border-color: var(--color-buy);
+          color: var(--color-buy);
+        }
+        .alert-auto-status {
+          font-size: 9px;
+          color: var(--text-muted);
+          padding: 0 2px;
         }
         .alert-check-btn {
           display: inline-flex;
@@ -566,6 +753,42 @@ export default function AlertsManager({ apiBase }) {
           flex-direction: column;
           gap: 8px;
         }
+        .alert-check-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .alert-check-news {
+          display: flex;
+          align-items: flex-start;
+          gap: 5px;
+          font-size: 10px;
+          line-height: 1.5;
+          opacity: 0.85;
+        }
+        .alert-check-news svg { flex: 0 0 auto; margin-top: 2px; }
+        .alert-watch {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          padding: 9px 10px;
+          border: 1px dashed var(--border-color);
+          border-radius: 8px;
+          background: rgba(0, 0, 0, 0.18);
+        }
+        .alert-watch-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          padding: 7px 10px;
+          border-radius: 7px;
+          border: 1px solid var(--color-accent);
+          background: rgba(6, 182, 212, 0.1);
+          color: var(--color-accent);
+          font-size: 11.5px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .alert-watch-btn:disabled { opacity: 0.6; cursor: default; }
+        .alert-watch-msg { font-size: 10px; line-height: 1.5; color: var(--text-muted); }
+        .alert-watch-msg.err { color: var(--color-sell); }
         .alert-form-header {
           display: flex;
           align-items: center;

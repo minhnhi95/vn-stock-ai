@@ -1,17 +1,41 @@
 """
-Patch vnstock 4.x: ngăn sys.exit() khi rate limit + helper safe_call.
+Bootstrap an toàn cho runtime — import module này TRƯỚC mọi service.
 
-vnstock free tier 20 req/min hit limit → thư viện call `sys.exit()` giết worker.
-Patch CleanErrorContext.__exit__ để propagate RateLimitExceeded normally thay vì sys.exit.
+1. force_utf8_console(): stdout/stderr về UTF-8. Trên Windows console mặc định
+   là cp1252, nên `print(f"[foreign] lỗi: {e}")` với text tiếng Việt raise
+   UnicodeEncodeError NGAY TRONG except handler → request trả 500 thay vì
+   fallback êm (bug thật: /api/foreign, /api/insider).
+2. patch_vnstock_quota(): vnstock free tier 20 req/min hit limit → thư viện gọi
+   `sys.exit()` giết worker. Patch CleanErrorContext.__exit__ để RateLimitExceeded
+   propagate bình thường thay vì sys.exit.
 """
 from __future__ import annotations
 
 import logging
+import sys
 from typing import Any, Callable, Optional, TypeVar
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 _patched = False
+
+
+def force_utf8_console() -> None:
+    """
+    Đưa stdout/stderr về UTF-8 với errors="replace".
+
+    Idempotent và không bao giờ raise: nếu stream đã bị thay thế bằng object
+    không có .reconfigure (pytest capture, gunicorn log wrapper) thì bỏ qua.
+    """
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
 
 
 def patch_vnstock_quota() -> None:
@@ -58,5 +82,6 @@ def safe_call(fn: Callable[..., T], *args: Any, default: Optional[T] = None, **k
         return default
 
 
-# Apply patch ngay khi module được import
+# Apply ngay khi module được import
+force_utf8_console()
 patch_vnstock_quota()

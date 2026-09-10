@@ -101,9 +101,13 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 24px;
-  height: 70px;
+  gap: 16px;
+  padding: 10px 20px;
+  /* min-height thay vì height: nội dung xuống hàng thì header cao thêm chứ
+     không bị cắt như trước. */
+  min-height: 66px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .logo-section {
@@ -119,7 +123,8 @@ body {
 
 .logo-text {
   font-family: var(--font-display);
-  font-size: 24px;
+  white-space: nowrap;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: 0.5px;
   background: linear-gradient(to right, #06b6d4, #8b5cf6);
@@ -129,8 +134,64 @@ body {
 
 .header-stats {
   display: flex;
-  gap: 24px;
+  gap: 18px;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.header-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Không đủ chỗ cho 5 nhãn -> giữ icon, nhãn chuyển sang tooltip/aria. */
+@media (max-width: 1360px) {
+  .header-btn-label { display: none; }
+  .header-btn { padding: 8px 10px; }
+}
+
+/* Hẹp hơn nữa: cụm nút xuống hàng riêng, trải đều thay vì chen vào một dòng. */
+@media (max-width: 900px) {
+  .app-header { padding: 10px 14px; }
+  .header-actions {
+    order: 3;
+    width: 100%;
+    justify-content: space-between;
+  }
+  .header-btn-label { display: inline; }
+  .header-btn { flex: 1 1 auto; justify-content: center; }
+}
+
+/* Điện thoại: 5 nút có nhãn chiếm 3 hàng và đẩy biểu đồ xuống dưới màn hình.
+   Gom thành một hàng vuốt ngang, chạm vẫn đủ 44px theo guideline. */
+@media (max-width: 640px) {
+  .header-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    gap: 6px;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .header-actions::-webkit-scrollbar { display: none; }
+  .header-btn {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
 }
 
 .stat-item {
@@ -163,7 +224,9 @@ body {
 /* Dashboard Grid */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 320px 1fr 380px;
+  /* minmax thay vì px cứng: trên màn rộng hai rail nở thêm thay vì dồn hết chỗ
+     cho cột giữa, còn cột giữa vẫn được ưu tiên nhờ 1fr. */
+  grid-template-columns: minmax(300px, 0.85fr) minmax(0, 2.4fr) minmax(340px, 1fr);
   gap: 16px;
   flex-grow: 1;
   min-height: 0; /* Important for nested scrolling */
@@ -171,7 +234,7 @@ body {
 
 @media (max-width: 1200px) {
   .dashboard-grid {
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: minmax(280px, 0.9fr) minmax(0, 2fr);
   }
   .ai-column {
     grid-column: span 2;
@@ -400,32 +463,29 @@ body {
     letter-spacing: 0.3px;
   }
 
-  /* Header stats collapse vào menu — hide by default, show via toggle */
+  /* Dải ticker: trạng thái phiên + mã + giá + biến động, luôn hiện. */
   .header-stats {
-    display: none;
-    width: 100%;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 12px;
-    margin-top: 8px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    order: 3;
-  }
-
-  .header-stats.is-open,
-  .app-header.menu-open .header-stats {
     display: flex;
-  }
-
-  .stat-item {
     flex-direction: row;
     align-items: center;
-    justify-content: space-between;
+    flex-wrap: nowrap;
     width: 100%;
-    gap: 12px;
+    order: 2;
+    gap: 14px;
+    padding: 8px 2px 0;
+    /* Nhiều mục hơn bề rộng máy thì cho vuốt ngang, đừng xuống dòng lởm chởm. */
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .header-stats::-webkit-scrollbar { display: none; }
+
+  .stat-item {
+    flex-direction: column;
+    align-items: flex-start;
+    flex: 0 0 auto;
+    gap: 2px;
+    white-space: nowrap;
   }
 
   .stat-label {
@@ -436,29 +496,6 @@ body {
     font-size: 15px;
   }
 
-  /* Menu toggle button (consumer renders <button class="header-menu-toggle">) */
-  .header-menu-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    min-height: 44px;
-    background: transparent;
-    border: 1px solid var(--border-color);
-    border-radius: 10px;
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .header-menu-toggle:hover,
-  .header-menu-toggle:active {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: var(--color-accent);
-  }
-
   /* Grid → single column */
   .dashboard-grid {
     grid-template-columns: 1fr;
@@ -466,6 +503,13 @@ body {
     /* Allow page-level scroll on mobile instead of nested column scrolling */
     flex-grow: 0;
   }
+
+  /* Thứ tự trên mobile: biểu đồ + danh mục lên trước. Theo thứ tự DOM (rail
+     trái -> giữa -> phải) người dùng phải cuộn qua ~3,6 màn hình panel phụ mới
+     tới biểu đồ — thứ đầu tiên họ mở app để xem. */
+  .dashboard-grid > .main-column { order: 1; }
+  .dashboard-grid > .column:nth-child(1) { order: 2; }
+  .dashboard-grid > .column:nth-child(3) { order: 3; }
 
   .column,
   .main-column,
@@ -494,15 +538,9 @@ body {
     overflow-y: visible;
   }
 
-  /* Chart panel: smaller height on mobile */
-  .chart-panel,
-  .chart-container,
-  [class*="chart"] .panel-content {
-    min-height: 280px;
-  }
-
+  /* Chart panel trên mobile: vẫn đủ chỗ cho giá + 2 khung chỉ báo */
   .chart-panel {
-    height: 280px;
+    height: 520px;
   }
 
   /* Touch targets — 44px min on buttons */
@@ -530,9 +568,103 @@ body {
   }
 }
 
-/* DESKTOP — explicit chart height (keeps 380px as spec) */
+/* Khung biểu đồ: giá (co giãn) + RSI 96px + MACD 96px + toolbar/legend ~48px */
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  /* Không flex-grow: cột giữa còn có bảng danh mục bên dưới, để grow thì chart
+     nuốt hết chỗ và bảng bị ép còn vài dòng. */
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.chart-panel-content {
+  padding: 10px 12px 12px;
+  gap: 0;
+  /* Chart tự quản lý cuộn nội bộ; để auto sẽ sinh thanh cuộn thừa khi resize. */
+  overflow: hidden;
+  min-height: 0;
+}
+
 @media (min-width: 641px) {
   .chart-panel {
-    height: 380px;
+    height: 640px;
+  }
+}
+
+/* ===================================================================
+   Mobile-first: điều hướng theo tab
+   ===================================================================
+   .panel-slot dùng display:contents nên trên desktop nó KHÔNG sinh box —
+   layout 3 cột giữ nguyên như chưa từng có wrapper. Trên mobile mới dùng nó
+   để ẩn/hiện theo tab. Nhờ vậy chỉ có MỘT cây JSX cho cả hai kích thước.
+   =================================================================== */
+
+.panel-slot { display: contents; }
+
+/* Thanh nav đáy chỉ tồn tại trên mobile. */
+.mobile-nav { display: none; }
+
+@media (max-width: 900px) {
+  /* Các section cột tan ra, mọi panel chảy vào một danh sách dọc. */
+  .dashboard-grid > section { display: contents; }
+
+  .dashboard-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    /* Chừa chỗ cho thanh nav cố định + vùng an toàn của iPhone. */
+    padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .panel-slot { display: none; }
+  .mobile-tab-stock .panel-slot[data-tab='stock'],
+  .mobile-tab-market .panel-slot[data-tab='market'],
+  .mobile-tab-portfolio .panel-slot[data-tab='portfolio'],
+  .mobile-tab-watch .panel-slot[data-tab='watch'] {
+    display: contents;
+  }
+
+  .mobile-nav {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    background: rgba(4, 8, 21, 0.94);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border-color);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .mobile-nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    /* 56px: đủ lớn cho ngón tay theo guideline chạm 44px. */
+    min-height: 56px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 10px;
+    cursor: pointer;
+    padding: 6px 2px;
+  }
+
+  .mobile-nav-btn.active { color: var(--color-accent); }
+
+  /* Gạch chỉ báo tab đang chọn, đặt sát mép trên của nút. */
+  .mobile-nav-btn.active::before {
+    content: '';
+    position: absolute;
+    margin-top: -6px;
+    width: 22px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--color-accent);
   }
 }

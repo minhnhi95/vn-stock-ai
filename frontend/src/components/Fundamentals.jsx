@@ -1,40 +1,76 @@
-import React from 'react';
-import { FileText } from 'lucide-react';
+import { useState } from 'react';
+import { FileText, AlertTriangle, ArrowUp, ArrowDown, Minus } from 'lucide-react';
 
-const fmt = (v, suffix = '', prec = 2) => {
-  if (v === null || v === undefined || Number.isNaN(v)) return 'N/A';
-  return `${Number(v).toFixed(prec)}${suffix}`;
+/**
+ * Chỉ số cơ bản, đọc được cho người chưa từng học tài chính.
+ *
+ * Bản cũ chấm màu theo ngưỡng cứng ("P/E < 10: rẻ") — đó là một phán quyết đội
+ * lốt chú thích: 10 là rẻ với ngân hàng nhưng đắt với thép, và người mới không
+ * có cách nào biết điều đó. Bản này bỏ hết ngưỡng đoán mò, thay bằng ba thứ
+ * backend tính được thật:
+ *   - một câu tiếng Việt nói con số đó nghĩa gì với tiền của người dùng
+ *   - trung vị cùng ngành, kèm số mã đã dùng để tính
+ *   - trường hợp con số này đánh lừa
+ *
+ * Chip so sánh cố ý KHÔNG tô xanh/đỏ. "Rẻ hơn ngành" tô xanh là gợi ý mua, mà
+ * rẻ hơn ngành có thể chỉ vì thị trường đã biết một tin xấu mà người đọc chưa biết.
+ */
+
+const COMPARISON_ICON = {
+  above: ArrowUp,
+  below: ArrowDown,
+  inline: Minus,
 };
 
-const Metric = ({ label, value, hint, tone }) => (
-  <div className="fundamental-metric">
-    <span className="fundamental-label">{label}</span>
-    <span className={`fundamental-value ${tone || ''}`}>{value}</span>
-    {hint ? <span className="fundamental-hint">{hint}</span> : null}
-  </div>
-);
+function MetricRow({ item, open, onToggle, showChip }) {
+  const Icon = COMPARISON_ICON[item.comparison];
+  return (
+    <div className={`fm-row ${open ? 'open' : ''} ${showChip ? '' : 'no-chip'}`}>
+      <button type="button" className="fm-head" onClick={onToggle} aria-expanded={open}>
+        <span className="fm-label">{item.label}</span>
+        <span className="fm-value">{item.display}</span>
+        {/* Cột chip chỉ tồn tại khi mã này có bảng ngành. Không có thì bỏ hẳn cột,
+            đừng để 13 ô rỗng chiếm chỗ trong một cột vốn đã hẹp. */}
+        {showChip ? (
+          <span className="fm-chip" title={item.comparison_text || undefined}>
+            {Icon ? <Icon size={11} /> : null}
+            {item.sector ? item.sector.display : null}
+          </span>
+        ) : null}
+      </button>
 
-const toneForPE = (pe) => {
-  if (pe === null || pe === undefined) return '';
-  if (pe < 10) return 'good';
-  if (pe < 20) return 'neutral';
-  return 'warn';
-};
-const toneForROE = (roe) => {
-  if (roe === null || roe === undefined) return '';
-  if (roe >= 15) return 'good';
-  if (roe >= 8) return 'neutral';
-  return 'warn';
-};
-const toneForGrowth = (g) => {
-  if (g === null || g === undefined) return '';
-  if (g > 10) return 'good';
-  if (g >= 0) return 'neutral';
-  return 'warn';
-};
+      {open ? (
+        <div className="fm-detail">
+          <p className="fm-plain">{item.plain}</p>
+          {item.comparison_text ? (
+            <p className="fm-compare">
+              {item.comparison_text}{' '}
+              {/* Số mã dùng để tính là căn cứ để người đọc tự cân nhắc mức độ tin
+                  cậy — 12 mã khác hẳn 5 mã. Viết thành câu riêng vì câu so sánh
+                  đã kết thúc bằng một ngoặc đơn rồi. */}
+              <span className="fm-sample">
+                Trung vị của {item.sector.sample} mã cùng ngành.
+              </span>
+            </p>
+          ) : null}
+          <p className="fm-caveat">
+            <AlertTriangle size={11} />
+            <span>{item.caveat}</span>
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default function Fundamentals({ data, symbol }) {
+  const [openKey, setOpenKey] = useState(null);
+
   const available = data?.available;
+  const items = data?.explain?.items || [];
+  const sector = data?.explain?.sector;
+  const benchmarkDate = data?.explain?.benchmark_date;
+  const hasSector = items.some((i) => i.sector);
 
   return (
     <div className="glass-panel">
@@ -43,82 +79,159 @@ export default function Fundamentals({ data, symbol }) {
           <FileText size={16} className="text-accent" />
           <span>Cơ bản doanh nghiệp: {symbol}</span>
         </div>
-        {data?.source ? <span className="fundamental-source">Nguồn: {data.source}</span> : null}
+        {data?.source ? <span className="fm-source">Nguồn: {data.source}</span> : null}
       </div>
-      <div className="panel-content fundamental-grid">
+
+      <div className="panel-content fm-content">
         {!available ? (
-          <div className="fundamental-empty">
-            {data?.reason || 'Đang tải dữ liệu cơ bản...'}
-          </div>
+          <div className="fm-empty">{data?.reason || 'Đang tải dữ liệu cơ bản...'}</div>
         ) : (
           <>
-            <Metric label="P/E" value={fmt(data.pe)} tone={toneForPE(data.pe)} hint="< 10: rẻ · 10-20: hợp lý · > 20: cao" />
-            <Metric label="P/B" value={fmt(data.pb)} />
-            <Metric label="ROE" value={fmt(data.roe, '%')} tone={toneForROE(data.roe)} hint="> 15% tốt" />
-            <Metric label="ROA" value={fmt(data.roa, '%')} />
-            <Metric label="Net margin" value={fmt(data.net_margin, '%')} />
-            <Metric label="Gross margin" value={fmt(data.gross_margin, '%')} />
-            <Metric label="Nợ/VCSH" value={fmt(data.debt_to_equity)} />
-            <Metric label="Cổ tức" value={fmt(data.dividend_yield, '%')} />
-            <Metric label="EPS" value={fmt(data.eps, '', 0)} />
-            {data.period ? <div className="fundamental-period">Kỳ: {data.period}</div> : null}
+            <p className="fm-intro">
+              Bấm vào từng dòng để xem con số đó nghĩa là gì.
+              {sector ? (
+                <>
+                  {' '}
+                  So sánh với ngành <b>{sector}</b>
+                  {benchmarkDate ? ` (số liệu ${benchmarkDate})` : null}.
+                </>
+              ) : (
+                ' Mã này chưa có bảng trung vị ngành để đối chiếu.'
+              )}
+            </p>
+
+            {items.length ? (
+              <div className="fm-list">
+                {items.map((item) => (
+                  <MetricRow
+                    key={item.key}
+                    item={item}
+                    showChip={hasSector}
+                    open={openKey === item.key}
+                    onToggle={() => setOpenKey(openKey === item.key ? null : item.key)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="fm-empty">Không có chỉ số nào đọc được cho mã này.</div>
+            )}
+
+            {data.stale ? (
+              <div className="fm-stale">
+                <AlertTriangle size={12} />
+                <span>
+                  {data.stale_note ||
+                    'Số liệu cơ bản đã cũ — không dùng để kết luận định giá hiện tại.'}
+                </span>
+              </div>
+            ) : null}
+            {data.period ? <div className="fm-period">Kỳ báo cáo: {data.period}</div> : null}
           </>
         )}
       </div>
 
       <style>{`
-        .fundamental-grid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 10px;
-        }
-        .fundamental-empty {
-          grid-column: 1 / -1;
+        .fm-content { gap: 10px; }
+        .fm-source { font-size: 10px; color: var(--text-muted); }
+        .fm-empty {
           padding: 20px 10px;
           text-align: center;
           color: var(--text-muted);
           font-size: 12px;
         }
-        .fundamental-source {
-          font-size: 10px;
+        .fm-intro {
+          margin: 0;
+          font-size: 11px;
+          line-height: 1.6;
           color: var(--text-muted);
         }
-        .fundamental-metric {
-          background: rgba(0, 0, 0, 0.25);
+        .fm-intro b { color: var(--text-primary); }
+        .fm-list { display: flex; flex-direction: column; gap: 4px; }
+        .fm-row {
           border: 1px solid var(--border-color);
-          border-radius: 8px;
+          border-radius: 7px;
+          background: rgba(0, 0, 0, 0.2);
+          overflow: hidden;
+        }
+        .fm-row.open { border-color: var(--color-accent); }
+        .fm-head {
+          width: 100%;
+          display: grid;
+          grid-template-columns: 1fr auto auto;
+          align-items: center;
+          gap: 8px;
           padding: 8px 10px;
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
+          background: none;
+          border: none;
+          color: inherit;
+          text-align: left;
+          cursor: pointer;
+          font-size: 11px;
         }
-        .fundamental-label {
-          font-size: 10px;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-        }
-        .fundamental-value {
+        .fm-label { color: var(--text-primary); }
+        .fm-value {
           font-family: var(--font-display);
           font-weight: 700;
-          font-size: 14px;
+          font-size: 13px;
           color: var(--text-primary);
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
         }
-        .fundamental-value.good { color: var(--color-buy); }
-        .fundamental-value.warn { color: var(--color-sell); }
-        .fundamental-value.neutral { color: var(--color-accent); }
-        .fundamental-hint {
-          font-size: 9px;
-          color: var(--text-muted);
-        }
-        .fundamental-period {
-          grid-column: 1 / -1;
-          text-align: center;
+        /* Chip trung tính: nói cao hay thấp so với ngành, không nói tốt hay xấu. */
+        .fm-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          min-width: 62px;
+          justify-content: flex-end;
           font-size: 10px;
           color: var(--text-muted);
-          padding: 4px;
-          font-style: italic;
+          font-variant-numeric: tabular-nums;
+          white-space: nowrap;
         }
+        .fm-row.no-chip .fm-head { grid-template-columns: 1fr auto; }
+        .fm-detail {
+          padding: 0 10px 10px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .fm-plain {
+          margin: 0;
+          font-size: 11.5px;
+          line-height: 1.65;
+          color: var(--text-primary);
+        }
+        .fm-compare {
+          margin: 0;
+          font-size: 11px;
+          line-height: 1.6;
+          color: var(--color-accent);
+        }
+        .fm-sample { color: var(--text-muted); }
+        .fm-caveat {
+          margin: 0;
+          display: flex;
+          gap: 6px;
+          font-size: 10.5px;
+          line-height: 1.6;
+          color: var(--text-muted);
+        }
+        .fm-caveat svg { flex: 0 0 auto; margin-top: 3px; }
+        .fm-stale {
+          display: flex;
+          align-items: flex-start;
+          gap: 6px;
+          font-size: 10.5px;
+          line-height: 1.5;
+          color: var(--color-sell);
+          background: rgba(244, 63, 94, 0.08);
+          border: 1px solid rgba(244, 63, 94, 0.25);
+          border-radius: 7px;
+          padding: 8px 10px;
+        }
+        .fm-stale svg { flex: 0 0 auto; margin-top: 2px; }
+        .fm-period { font-size: 10px; color: var(--text-muted); text-align: right; }
       `}</style>
     </div>
   );

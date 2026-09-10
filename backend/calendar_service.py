@@ -16,7 +16,7 @@ CRITICAL FINDING (Phase 1 probe):
         - payment_date (ngày thanh toán cổ tức)
         - value / rate / dividend_ratio / cash_dividend (tỷ lệ / giá trị cổ tức)
         - currency (mặc định VND nếu không có)
-    Schema có thể thay đổi giữa các source (VCI / TCBS) — dùng substring fallback.
+    Schema có thể thay đổi giữa các source (VCI / KBS) — dùng substring fallback.
 
 Conventions:
 - Defensive try/except quanh mọi vnstock call
@@ -153,11 +153,24 @@ def _parse_date(value) -> Optional[datetime]:
         return None
 
 
-def _classify_event(event_name: str, event_code: str = "") -> str:
+# Cột `category` của vnstock — đáng tin hơn dò keyword, dùng trước.
+_CATEGORY_MAP = {
+    "DIVIDEND": "dividend",
+    "SHAREHOLDER_MEETING": "agm",
+    "BUSINESS_RESULT": "earnings",
+    "MAJOR_SHAREHOLDER_TRADING": "insider",
+}
+
+
+def _classify_event(event_name: str, event_code: str = "", category: str = "") -> str:
     """
-    Phân loại sự kiện thành: 'dividend' / 'earnings' / 'agm' / 'other'.
-    Dựa vào substring keyword trong event_name + event_code.
+    Phân loại sự kiện thành: 'dividend' / 'earnings' / 'agm' / 'insider' / 'other'.
+    Ưu tiên cột category của vnstock, fallback substring keyword.
     """
+    mapped = _CATEGORY_MAP.get(_safe_str(category).upper())
+    if mapped:
+        return mapped
+
     haystack = f"{event_name} {event_code}".lower()
     for kw in _DIVIDEND_KEYWORDS:
         if kw in haystack:
@@ -192,7 +205,7 @@ def _fetch_events_raw(symbol: str) -> Dict[str, Any]:
         return {"available": False, "symbol": symbol, "events": [], "reason": "vnstock không khả dụng"}
 
     last_error: Optional[str] = None
-    for source in ("VCI", "TCBS"):
+    for source in ("VCI", "KBS"):
         try:
             company = Company(symbol=symbol, source=source)
             if not hasattr(company, "events"):
@@ -208,27 +221,36 @@ def _fetch_events_raw(symbol: str) -> Dict[str, Any]:
 
             name_col = _pick_col(cols_lower, "event_name", "event_title", "title", "ten_su_kien")
             code_col = _pick_col(cols_lower, "event_code", "code", "ma_su_kien")
+            # `exright_date` = ngày giao dịch không hưởng quyền (GDKHQ) trong
+            # schema VCI thật; các tên còn lại giữ cho version/nguồn khác.
             exec_col = _pick_col(
                 cols_lower,
-                "exer_date", "exec_date", "exercise_date", "ex_date",
+                "exright_date", "exer_date", "exec_date", "exercise_date", "ex_date",
                 "ex_dividend_date", "ngay_gdkhq",
             )
             record_col = _pick_col(cols_lower, "record_date", "ngay_chot_ds", "ngay_chot_danh_sach")
             payment_col = _pick_col(
                 cols_lower,
-                "payment_date", "pay_date", "ngay_thanh_toan", "ngay_tra_co_tuc",
+                "payout_date", "payment_date", "pay_date", "ngay_thanh_toan", "ngay_tra_co_tuc",
             )
             public_col = _pick_col(
                 cols_lower,
                 "public_date", "issue_date", "notify_date", "publish_date", "ngay_cong_bo",
             )
+            # value_per_share = cổ tức tiền mặt (VND/cp); exercise_ratio = tỷ lệ
+            # với cổ phiếu thưởng/phát hành thêm. Ưu tiên tiền mặt.
             rate_col = _pick_col(
                 cols_lower,
-                "rate", "dividend_ratio", "cash_dividend", "value", "amount",
-                "ty_le", "gia_tri",
+                "value_per_share", "rate", "dividend_ratio", "cash_dividend", "value",
+                "amount", "ty_le", "gia_tri",
             )
+            ratio_col = _pick_col(cols_lower, "exercise_ratio", "ratio")
+            category_col = _pick_col(cols_lower, "category")
             currency_col = _pick_col(cols_lower, "currency", "don_vi", "unit")
-            desc_col = _pick_col(cols_lower, "description", "note", "mo_ta", "ghi_chu", "content")
+            desc_col = _pick_col(
+                cols_lower,
+                "event_title_vi", "description", "note", "mo_ta", "ghi_chu", "content",
+            )
 
             if name_col is None and code_col is None:
                 last_error = f"Schema events() không có cột tên/mã ở source={source}, cols={list(df.columns)[:5]}"
@@ -250,7 +272,9 @@ def _fetch_events_raw(symbol: str) -> Dict[str, Any]:
                 currency = _safe_str(row.get(currency_col)) if currency_col else ""
                 desc = _safe_str(row.get(desc_col)) if desc_col else ""
 
-                event_type = _classify_event(event_name, event_code)
+                category = _safe_str(row.get(category_col)) if category_col else ""
+                event_type = _classify_event(event_name, event_code, category)
+                ratio_val = _safe_float(row.get(ratio_col)) if ratio_col else None
 
                 events.append({
                     "symbol": symbol,
@@ -262,6 +286,7 @@ def _fetch_events_raw(symbol: str) -> Dict[str, Any]:
                     "payment_date": payment_dt.isoformat() if payment_dt else None,
                     "public_date": public_dt.isoformat() if public_dt else None,
                     "rate": rate_val,
+                    "ratio": ratio_val,
                     "currency": currency or ("VND" if event_type == "dividend" else ""),
                     "description": desc,
                     "source": source,
@@ -320,7 +345,14 @@ def _fetch_batch(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
 
 # ---------- Public API ----------
 
-def get_dividend_calendar(symbols: List[str], days_ahead: int = 30) -> List[Dict[str, Any]]:
+# Sự kiện vừa diễn ra vẫn hữu ích (đã chốt quyền tháng trước, vừa chia thưởng),
+# và doanh nghiệp VN thường công bố sát ngày nên danh sách "sắp tới" hay rỗng.
+DEFAULT_DAYS_BACK = 45
+
+
+def get_dividend_calendar(
+    symbols: List[str], days_ahead: int = 30, days_back: int = DEFAULT_DAYS_BACK
+) -> List[Dict[str, Any]]:
     """
     Lịch chia cổ tức sắp tới cho danh sách mã.
 
@@ -344,6 +376,7 @@ def get_dividend_calendar(symbols: List[str], days_ahead: int = 30) -> List[Dict
 
     now = now_vn()
     horizon = now + timedelta(days=max(days_ahead, 0))
+    floor = now - timedelta(days=max(days_back, 0))
 
     batch = _fetch_batch(symbols)
     out: List[Dict[str, Any]] = []
@@ -363,17 +396,23 @@ def get_dividend_calendar(symbols: List[str], days_ahead: int = 30) -> List[Dict
 
             exec_dt = _parse_date(ev.get("exec_date"))
             payment_dt = _parse_date(ev.get("payment_date"))
-            # Mốc filter: ưu tiên exec_date (ngày GDKHQ), fallback payment_date.
-            anchor = exec_dt or payment_dt
+            # Mốc filter: ưu tiên exec_date (ngày GDKHQ), rồi payment_date.
+            # Cổ phiếu thưởng thường chỉ có ngày công bố -> dùng làm mốc cuối,
+            # nếu không sự kiện dạng này biến mất khỏi lịch.
+            anchor = exec_dt or payment_dt or _parse_date(ev.get("public_date"))
             if anchor is None:
                 continue
-            if anchor < now or anchor > horizon:
+            if anchor < floor or anchor > horizon:
                 continue
 
             out.append({
                 "symbol": ev.get("symbol"),
                 "type": "dividend",
                 "event_name": ev.get("event_name"),
+                # `date` là field frontend đọc; giữ exec_date cho caller cũ.
+                "date": anchor.date().isoformat(),
+                "is_past": anchor < now,
+                "ratio": ev.get("ratio"),
                 "exec_date": ev.get("exec_date"),
                 "payment_date": ev.get("payment_date"),
                 "record_date": ev.get("record_date"),
@@ -392,7 +431,9 @@ def get_dividend_calendar(symbols: List[str], days_ahead: int = 30) -> List[Dict
     return out
 
 
-def get_upcoming_events(symbols: List[str], days_ahead: int = 60) -> List[Dict[str, Any]]:
+def get_upcoming_events(
+    symbols: List[str], days_ahead: int = 60, days_back: int = DEFAULT_DAYS_BACK
+) -> List[Dict[str, Any]]:
     """
     Tất cả sự kiện sắp tới: AGM, BCTC, GDKHQ cổ tức.
 
@@ -408,6 +449,7 @@ def get_upcoming_events(symbols: List[str], days_ahead: int = 60) -> List[Dict[s
 
     now = now_vn()
     horizon = now + timedelta(days=max(days_ahead, 0))
+    floor = now - timedelta(days=max(days_back, 0))
 
     batch = _fetch_batch(symbols)
     out: List[Dict[str, Any]] = []
@@ -422,6 +464,9 @@ def get_upcoming_events(symbols: List[str], days_ahead: int = 60) -> List[Dict[s
             continue
 
         for ev in payload.get("events", []):
+            # Giao dịch nội bộ đã có panel riêng — để đây sẽ lấn hết lịch sự kiện.
+            if ev.get("type") == "insider":
+                continue
             exec_dt = _parse_date(ev.get("exec_date"))
             payment_dt = _parse_date(ev.get("payment_date"))
             public_dt = _parse_date(ev.get("public_date"))
@@ -430,14 +475,19 @@ def get_upcoming_events(symbols: List[str], days_ahead: int = 60) -> List[Dict[s
             anchor = exec_dt or payment_dt or public_dt
             if anchor is None:
                 continue
-            if anchor < now or anchor > horizon:
+            if anchor < floor or anchor > horizon:
                 continue
 
             out.append({
                 "symbol": ev.get("symbol"),
                 "type": ev.get("type"),
+                # Frontend đọc `date` + `event_type`; giữ tên cũ cho caller khác.
+                "date": anchor.date().isoformat(),
+                "event_type": ev.get("type"),
+                "is_past": anchor < now,
                 "event_name": ev.get("event_name"),
                 "event_code": ev.get("event_code"),
+                "ratio": ev.get("ratio"),
                 "exec_date": ev.get("exec_date"),
                 "payment_date": ev.get("payment_date"),
                 "record_date": ev.get("record_date"),

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   X,
   Shield,
@@ -12,6 +12,7 @@ import {
   Lightbulb,
   Loader2,
 } from 'lucide-react';
+import useModalDismiss from '../hooks/useModalDismiss';
 
 const scoreTone = (score) => {
   if (score === null || score === undefined) return '';
@@ -43,6 +44,8 @@ const WARNING_META = {
 };
 
 export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
+  useModalDismiss(open, onClose);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [review, setReview] = useState(null);
@@ -58,10 +61,12 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
       setReview(null);
       setEmpty(false);
       try {
-        const res = await fetch(`${apiBase}/api/portfolio/review`, {
+        // apiBase đã kết thúc bằng /api — thêm "/api" nữa là gọi vào /api/api/... (404).
+        // Body cũng phải dùng đúng tên field backend khai báo: apiKey, không phải api_key.
+        const res = await fetch(`${apiBase}/portfolio/review`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ api_key: apiKey }),
+          body: JSON.stringify({ apiKey }),
         });
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -90,7 +95,14 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
   const score = review?.overall_score;
   const sTone = scoreTone(score);
   const rTone = riskTone(review?.risk_level);
-  const warnings = review?.warnings || {};
+  // Backend trả cảnh báo dưới dạng field phẳng `<key>_warning` (chuỗi mô tả hoặc
+  // null), không phải object `warnings` lồng nhau — đọc sai thì panel Cảnh báo
+  // không bao giờ hiện dù danh mục có tập trung quá mức.
+  const warnings = review?.warnings || {
+    concentration: review?.concentration_warning,
+    sector: review?.sector_warning,
+    correlation: review?.correlation_warning,
+  };
   const activeWarnings = Object.keys(WARNING_META).filter((k) => {
     const w = warnings[k];
     if (!w) return false;
@@ -107,6 +119,9 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
             <Sparkles size={18} className="logo-icon" />
             <span>Phân tích danh mục</span>
           </div>
+          {/* Không còn nút chọn nguồn: danh mục giả lập đã bị gỡ, và backend luôn
+              đọc sổ lệnh thật. Giữ lại nút chỉ để nó không làm gì là nói dối người dùng. */}
+          <span className="pr-source-label">Danh mục thật</span>
           <button className="pr-close" onClick={onClose} aria-label="Đóng">
             <X size={18} />
           </button>
@@ -241,7 +256,18 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
         }
         .pr-header {
           display: flex; align-items: center; justify-content: space-between;
+          gap: 12px;
           margin-bottom: 16px;
+        }
+        .pr-source-label {
+          margin-left: auto;
+          font-size: 11px;
+          color: var(--text-muted);
+          background: rgba(0, 0, 0, 0.3);
+          border: 1px solid var(--border-color);
+          border-radius: 999px;
+          padding: 5px 12px;
+          white-space: nowrap;
         }
         .pr-close {
           background: transparent; border: none; color: var(--text-muted);

@@ -2,7 +2,7 @@
 Lấy tin doanh nghiệp Việt Nam.
 
 Chiến lược:
-1. Thử vnstock.Company(symbol).news() (kênh chính - tin trực tiếp từ VCI/TCBS)
+1. Thử vnstock.Company(symbol).news() (kênh chính - tin trực tiếp từ VCI/KBS)
 2. Fallback: tìm trong tin chung của thị trường (RSS CafeF) lọc theo mã
 
 Trả về structure chuẩn để inject vào AI prompt + render UI.
@@ -10,6 +10,7 @@ Trả về structure chuẩn để inject vào AI prompt + render UI.
 from __future__ import annotations
 
 import hashlib
+import unicodedata
 import math
 import os
 import re
@@ -79,7 +80,7 @@ def _fetch_company_news(symbol: str) -> List[Dict[str, Any]]:
     if not HAS_COMPANY:
         return []
     last_err = None
-    for src in ("VCI", "TCBS"):
+    for src in ("VCI", "KBS"):
         try:
             c = Company(symbol=symbol, source=src)
             if not hasattr(c, "news"):
@@ -236,6 +237,78 @@ def _cosine(a: List[float], b: List[float]) -> float:
     return dot / (na * nb)
 
 
+def _normalize_vn(text: str) -> str:
+    """
+    Bỏ dấu tiếng Việt + hạ chữ thường, để "ket qua kinh doanh" khớp được với
+    "Kết quả kinh doanh". Dùng NFD rồi loại combining marks — không cần thư viện.
+    """
+    lowered = unicodedata.normalize("NFD", (text or "").lower())
+    stripped = "".join(ch for ch in lowered if not unicodedata.combining(ch))
+    # đ/Đ không phải dấu tổ hợp nên phải thay riêng.
+    return stripped.replace("\u0111", "d")
+
+
+def _keyword_score(query_tokens: List[str], item: Dict[str, Any]) -> float:
+    """
+    Tỷ lệ token của query xuất hiện trong tiêu đề/tóm tắt.
+    Token khớp ở tiêu đề tính trọng số gấp đôi so với tóm tắt.
+    """
+    if not query_tokens:
+        return 0.0
+    title = _normalize_vn(item.get("title", ""))
+    summary = _normalize_vn(item.get("summary", ""))
+
+    hits = 0.0
+    for token in query_tokens:
+        if token in title:
+            hits += 1.0
+        elif token in summary:
+            hits += 0.5
+    return hits / len(query_tokens)
+
+
+def search_news_keyword(
+    query: str,
+    top_k: int = 5,
+    symbol_filter: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Tìm theo từ khoá trong index tin đã ingest. Không cần API key, không gọi mạng.
+    """
+    tokens = [t for t in _normalize_vn(query).split() if len(t) > 1]
+
+    with _news_index_lock:
+        candidates = list(_news_index.values())
+
+    if symbol_filter:
+        filter_upper = {s.upper() for s in symbol_filter}
+        candidates = [c for c in candidates if (c.get("symbol", "").upper() in filter_upper)]
+
+    if not candidates:
+        return {
+            "ok": True,
+            "mode": "keyword",
+            "results": [],
+            "note": "Index trống. Mở các mã ở UI hoặc chạy /api/news?symbol=XXX trước để ingest tin.",
+        }
+
+    scored = [(_keyword_score(tokens, c), c) for c in candidates]
+    scored = [(score, item) for score, item in scored if score > 0]
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+
+    return {
+        "ok": True,
+        "mode": "keyword",
+        "query": query,
+        "indexed_count": len(candidates),
+        "note": "Kết quả khớp từ khoá. Nhập Gemini API key để tìm theo ngữ nghĩa.",
+        "results": [
+            {"score": round(score, 4), **{k: v for k, v in item.items() if not k.startswith("_")}}
+            for score, item in scored[:top_k]
+        ],
+    }
+
+
 def search_news_semantic(
     query: str,
     top_k: int = 5,
@@ -248,15 +321,12 @@ def search_news_semantic(
     Trả về top-k tin có cosine similarity cao nhất.
     """
     if not HAS_GENAI:
-        return {"ok": False, "error": "google-generativeai chưa được cài.", "results": []}
+        return search_news_keyword(query, top_k=top_k, symbol_filter=symbol_filter)
 
     q_vec = _embed_text(query, api_key)
     if q_vec is None:
-        return {
-            "ok": False,
-            "error": "Không tạo được embedding cho query (thiếu API key hoặc lỗi mạng).",
-            "results": [],
-        }
+        # Thiếu key hoặc mạng lỗi: khớp từ khoá vẫn hữu ích hơn là trả lỗi trắng.
+        return search_news_keyword(query, top_k=top_k, symbol_filter=symbol_filter)
 
     with _news_index_lock:
         candidates = list(_news_index.values())
@@ -268,6 +338,7 @@ def search_news_semantic(
     if not candidates:
         return {
             "ok": True,
+            "mode": "semantic",
             "results": [],
             "note": "Index trống. Mở các mã ở UI hoặc chạy /api/news?symbol=XXX trước để ingest tin.",
         }
@@ -300,6 +371,7 @@ def search_news_semantic(
 
     return {
         "ok": True,
+        "mode": "semantic",
         "query": query,
         "indexed_count": len(candidates),
         "results": [{"score": round(s, 4), **_strip_internal(item)} for s, item in top],

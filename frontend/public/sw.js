@@ -1,7 +1,7 @@
 /* VN Stock AI Analyzer — Service Worker */
-/* eslint-disable no-restricted-globals */
+ 
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL_CACHE = `vnstock-shell-${VERSION}`;
 const ASSET_CACHE = `vnstock-assets-${VERSION}`;
 const API_CACHE = `vnstock-api-${VERSION}`;
@@ -10,7 +10,8 @@ const SHELL_URLS = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
-  '/favicon.svg',
+  '/icon.svg',
+  '/icon-192.png',
 ];
 
 // ---------- Install: precache the app shell ----------

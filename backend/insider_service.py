@@ -1,10 +1,17 @@
 """
 Insider deals tracker — giao dịch cổ phiếu của lãnh đạo + cổ đông nội bộ.
 
-Theo probe Phase 1: vnstock 4.0.4 KHÔNG expose Company.insider_deals() riêng biệt.
-Phải gọi unified endpoint Company(symbol, source='VCI').events() — trả về DataFrame
-gộp 3 loại sự kiện: dividends, insider_deals, earnings/AGM. Service này filter
-type insider_deals trước khi normalize.
+vnstock 4.x KHÔNG có Company.insider_deals(). Phải gọi Company(symbol,
+source='VCI').events() — DataFrame gộp mọi loại sự kiện doanh nghiệp, phân biệt
+bằng cột `category`:
+    MAJOR_SHAREHOLDER_TRADING  -> giao dịch nội bộ  (module này)
+    DIVIDEND                   -> cổ tức            (calendar_service)
+    SHAREHOLDER_MEETING        -> ĐHĐCĐ
+Chi tiết giao dịch không có cột riêng, tất cả nằm trong chuỗi `event_title_vi`
+dạng "Nguyễn Văn Khoa - Đăng kí Mua 428,368 FPT" nên phải parse bằng regex.
+
+Giá trị giao dịch (VND) không có trong events() — module ước lượng bằng
+số lượng × giá đóng cửa gần nhất và đánh dấu value_estimated=True.
 
 Cache 1 giờ theo convention (giống fundamentals).
 
@@ -75,52 +82,42 @@ def _parse_date(s: str) -> Optional[datetime]:
     return None
 
 
-def _classify_action(text: str) -> str:
-    """Phân loại BUY / SELL / REGISTER_BUY / REGISTER_SELL / UNKNOWN từ text tiếng Việt."""
-    t = (text or "").lower()
-    # Đã thực hiện
-    if any(k in t for k in ("đã mua", "da mua", "mua vào", "mua vao", "bought", "purchased")):
-        return "BUY"
-    if any(k in t for k in ("đã bán", "da ban", "bán ra", "ban ra", "sold")):
-        return "SELL"
-    # Đăng ký
-    if any(k in t for k in ("đăng ký mua", "dang ky mua", "register to buy", "intends to buy")):
-        return "REGISTER_BUY"
-    if any(k in t for k in ("đăng ký bán", "dang ky ban", "register to sell", "intends to sell")):
-        return "REGISTER_SELL"
-    # Generic fallback
-    if "mua" in t:
-        return "BUY"
-    if "bán" in t or "ban" in t:
-        return "SELL"
-    return "UNKNOWN"
+# Cột `category` của events() — giá trị ổn định, đáng tin hơn là đoán theo tên.
+INSIDER_CATEGORIES = {"MAJOR_SHAREHOLDER_TRADING", "INSIDER_TRADING"}
+
+# "Nguyễn Văn Khoa - Đăng kí Mua 428,368 FPT"
+# "CTCP Tập đoàn ABC - Đã bán 1.000.000 HPG"
+_TITLE_RE = re.compile(
+    r"^(?P<person>.+?)\s*[-–—]\s*"
+    r"(?P<status>Đăng\s*k[ýí]|Đã)?\s*"
+    r"(?P<action>Mua|Bán)\s+"
+    r"(?P<shares>[\d.,]+)\s*"
+    r"(?P<ticker>[A-Z]{3})?",
+    re.IGNORECASE,
+)
 
 
 def _is_insider_event(row_dict: Dict[str, Any]) -> bool:
-    """
-    Heuristic detect row là insider_deal trong events() DataFrame.
-    Probe finding cho thấy events() có cột type/event_type — value có thể là:
-    - 'insider_deal', 'insider_trading', 'GIAO_DICH_CO_DONG_NOI_BO', ...
-    Fallback: nếu có cột volume + price + person_name → coi là insider.
-    """
-    type_keys = ("type", "event_type", "category", "event_category", "loai_su_kien")
-    for k in type_keys:
-        v = row_dict.get(k)
-        if v is None:
-            continue
-        s = str(v).lower()
-        if any(tok in s for tok in (
-            "insider", "co_dong_noi_bo", "co dong noi bo",
-            "noi_bo", "noibo", "giao_dich", "transaction",
-        )):
+    """Row có phải giao dịch nội bộ không — ưu tiên cột category."""
+    category = _safe_str(row_dict.get("category")).upper()
+    if category:
+        if category in INSIDER_CATEGORIES:
             return True
-        # Loại sự kiện rõ ràng KHÔNG phải insider
-        if any(tok in s for tok in ("dividend", "co_tuc", "agm", "earnings", "report")):
-            return False
-    # Fallback: có name + volume + price thì hầu như là insider
-    has_name = any(row_dict.get(k) for k in ("person_name", "name", "ten_nguoi", "shareholder"))
-    has_vol = any(row_dict.get(k) for k in ("volume", "quantity", "so_luong", "shares"))
-    return has_name and has_vol
+        # category có giá trị rõ ràng khác -> chắc chắn không phải insider.
+        return False
+
+    # Version không có `category`: dựa vào tên sự kiện.
+    for key in ("event_name_vi", "event_name", "type", "event_type"):
+        text = _safe_str(row_dict.get(key)).lower()
+        if text and ("nội bộ" in text or "insider" in text or "noi bo" in text):
+            return True
+    return False
+
+
+def _parse_shares(raw: str) -> Optional[int]:
+    """'428,368' hoặc '1.000.000' -> int. Dấu phân cách khác nhau tuỳ nguồn."""
+    digits = re.sub(r"[^\d]", "", raw or "")
+    return int(digits) if digits else None
 
 
 def _pick_col(cols_lower: Dict[str, str], *candidates: str) -> Optional[str]:
@@ -135,81 +132,69 @@ def _pick_col(cols_lower: Dict[str, str], *candidates: str) -> Optional[str]:
     return None
 
 
+def _first_date(row_dict: Dict[str, Any], *keys: str) -> Optional[str]:
+    """Ngày đầu tiên parse được trong các cột ưu tiên, trả ISO 'YYYY-MM-DD'."""
+    for key in keys:
+        parsed = _parse_date(_safe_str(row_dict.get(key)))
+        if parsed:
+            return parsed.date().isoformat()
+    return None
+
+
 def _normalize_insider_row(symbol: str, row_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Chuẩn hóa 1 row từ events() về schema insider deal nội bộ."""
-    cols_lower = {k.lower(): k for k in row_dict.keys()}
+    """Chuẩn hoá 1 row events() về schema deal mà frontend đang đọc."""
+    title = _safe_str(row_dict.get("event_title_vi")) or _safe_str(row_dict.get("event_title_en"))
+    event_name = _safe_str(row_dict.get("event_name_vi"))
 
-    name_col = _pick_col(cols_lower, "person_name", "shareholder", "name", "ten_nguoi", "ten")
-    position_col = _pick_col(cols_lower, "position", "chuc_vu", "title", "role")
-    action_col = _pick_col(cols_lower, "action", "type_transaction", "transaction_type", "loai_giao_dich", "description", "title")
-    volume_col = _pick_col(cols_lower, "volume", "quantity", "so_luong", "shares", "khoi_luong")
-    price_col = _pick_col(cols_lower, "price", "avg_price", "gia", "gia_giao_dich")
-    value_col = _pick_col(cols_lower, "value", "gia_tri", "total_value", "transaction_value")
-    date_col = _pick_col(cols_lower, "date", "transaction_date", "ngay_giao_dich", "public_date", "ngay")
-    note_col = _pick_col(cols_lower, "note", "ghi_chu", "description", "content", "title")
+    match = _TITLE_RE.match(title) if title else None
+    if match is None:
+        # Không parse được chi tiết thì vẫn giữ lại dòng để người dùng thấy có
+        # hoạt động nội bộ, chỉ là thiếu số liệu.
+        if not title:
+            return None
+        return {
+            "symbol": symbol,
+            "date": _first_date(row_dict, "start_date", "public_date", "display_date1"),
+            "person": title,
+            "role": event_name,
+            "type": "UNKNOWN",
+            "shares": None,
+            "value": None,
+            "value_estimated": False,
+            "reason": event_name or title,
+            "registered": False,
+        }
 
-    person = _safe_str(row_dict.get(name_col)) if name_col else ""
-    position = _safe_str(row_dict.get(position_col)) if position_col else ""
-
-    # Action: kết hợp action_col và note_col để phân loại
-    action_text = " ".join([
-        _safe_str(row_dict.get(action_col)) if action_col else "",
-        _safe_str(row_dict.get(note_col)) if note_col else "",
-    ])
-    action = _classify_action(action_text)
-
-    volume = _safe_int(row_dict.get(volume_col)) if volume_col else None
-    price_raw = _safe_float(row_dict.get(price_col)) if price_col else None
-    # vnstock thường trả giá theo nghìn đồng (ví dụ 73.7 thay vì 73700)
-    price_vnd = None
-    if price_raw is not None:
-        price_vnd = price_raw * 1000.0 if price_raw < 1000 else price_raw
-
-    value_raw = _safe_float(row_dict.get(value_col)) if value_col else None
-    # value đôi khi trả tỷ đồng — heuristic: nếu value < 1e6 và có volume*price hợp lý thì *1e9
-    value_vnd: Optional[float] = None
-    if value_raw is not None:
-        if value_raw < 1e6 and volume and price_vnd:
-            value_vnd = value_raw * 1e9
-        else:
-            value_vnd = value_raw
-    elif volume and price_vnd:
-        value_vnd = float(volume) * price_vnd
-
-    date_str = _safe_str(row_dict.get(date_col)) if date_col else ""
-    parsed_date = _parse_date(date_str)
-
-    # Phải có ít nhất 1 trong: person hoặc volume — nếu trống cả 2 thì bỏ
-    if not person and not volume:
-        return None
+    action = match.group("action").lower()
+    status = _safe_str(match.group("status")).lower()
+    shares = _parse_shares(match.group("shares"))
 
     return {
         "symbol": symbol,
-        "person_name": person or "N/A",
-        "position": position or "",
-        "action": action,
-        "volume": volume,
-        "price_vnd": price_vnd,
-        "value_vnd": value_vnd,
-        "is_large_trade": bool(value_vnd and value_vnd >= LARGE_TRADE_VND),
-        "date": date_str,
-        "date_iso": parsed_date.date().isoformat() if parsed_date else None,
-        "note": _safe_str(row_dict.get(note_col)) if note_col else "",
+        "date": _first_date(row_dict, "start_date", "public_date", "display_date1"),
+        "end_date": _first_date(row_dict, "end_date", "display_date2"),
+        "person": _safe_str(match.group("person")),
+        "role": event_name,
+        "type": "BUY" if action.startswith("mua") else "SELL",
+        "shares": shares,
+        "value": None,          # events() không có giá trị VND — điền sau khi biết giá
+        "value_estimated": False,
+        # "Đăng ký" = mới đăng ký, chưa chắc khớp; "Đã" = đã thực hiện.
+        "registered": status.startswith("đăng"),
+        "reason": title,
     }
 
 
-# ---------- Fetch chính ----------
-
 def _fetch_insider_events(symbol: str) -> List[Dict[str, Any]]:
     """
-    Gọi vnstock Company.events() và filter rows là insider_deal.
-    Defensive với nhiều source. Trả [] nếu không lấy được — caller xử lý fallback.
+    Gọi vnstock Company.events() và filter rows là giao dịch nội bộ.
+    Trả [] nếu không lấy được — caller xử lý fallback.
     """
     if not HAS_COMPANY:
         return []
 
     last_err = None
-    for source in ("VCI", "TCBS"):
+    for source in ("VCI", "KBS"):
         try:
             c = Company(symbol=symbol, source=source)
             if not hasattr(c, "events"):
@@ -228,11 +213,8 @@ def _fetch_insider_events(symbol: str) -> List[Dict[str, Any]]:
                     records.append(normalized)
 
             if records:
-                # Sort theo ngày giảm dần (mới nhất trước). Row không có date_iso đẩy xuống cuối.
-                records.sort(
-                    key=lambda r: r.get("date_iso") or "0000-00-00",
-                    reverse=True,
-                )
+                # Mới nhất trước; dòng thiếu ngày đẩy xuống cuối.
+                records.sort(key=lambda r: r.get("date") or "0000-00-00", reverse=True)
                 return records
         except Exception as e:
             last_err = str(e)
@@ -241,6 +223,30 @@ def _fetch_insider_events(symbol: str) -> List[Dict[str, Any]]:
     if last_err:
         print(f"[insider] events() failed for {symbol}: {last_err}")
     return []
+
+
+def _attach_estimated_values(symbol: str, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Quy đổi số lượng ra VND bằng giá gần nhất.
+
+    Đây là ƯỚC LƯỢNG: giá khớp thật của từng giao dịch nội bộ không được công bố
+    trong events(). Đánh dấu value_estimated để UI/prompt nói rõ.
+    """
+    try:
+        from market_service import fetch_realtime_price
+
+        price = (fetch_realtime_price(symbol) or {}).get("price")
+    except Exception:
+        price = None
+
+    if not price or price <= 0:
+        return records
+
+    for r in records:
+        if r.get("shares"):
+            r["value"] = float(r["shares"]) * float(price)
+            r["value_estimated"] = True
+    return records
 
 
 # ---------- Public API ----------
@@ -260,7 +266,73 @@ def get_insider_deals(symbol: str, last_n: int = 20) -> List[Dict[str, Any]]:
         _cache.set(cache_key, records, INSIDER_TTL_SECONDS)
         cached = records
 
-    return cached[: max(0, int(last_n))]
+    # Quy đổi giá trị NGOÀI cache: giá lấy từ market_service (đã có cache riêng
+    # và fallback giá đóng cửa). Nếu gộp vào cache 1 giờ ở trên thì một lần
+    # vnstock rate-limit sẽ khoá cột "giá trị" ở mức rỗng suốt cả tiếng.
+    selected = [dict(r) for r in cached[: max(0, int(last_n))]]
+    return _attach_estimated_values(symbol, selected)
+
+
+def summarize_deals(deals: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Gộp danh sách deal thành số tổng cho UI.
+    Trả cả theo giá trị (VND ước lượng) và theo số lượng cổ phiếu.
+    """
+    buy_value = sum(d.get("value") or 0.0 for d in deals if d.get("type") == "BUY")
+    sell_value = sum(d.get("value") or 0.0 for d in deals if d.get("type") == "SELL")
+    buy_shares = sum(d.get("shares") or 0 for d in deals if d.get("type") == "BUY")
+    sell_shares = sum(d.get("shares") or 0 for d in deals if d.get("type") == "SELL")
+    return {
+        "buy_value": buy_value,
+        "sell_value": sell_value,
+        "net": buy_value - sell_value,
+        "buy_shares": buy_shares,
+        "sell_shares": sell_shares,
+        "net_shares": buy_shares - sell_shares,
+        "count": len(deals),
+        "value_estimated": any(d.get("value_estimated") for d in deals),
+    }
+
+
+def get_insider_report(symbol: str, days: int = 30, last_n: int = 20) -> Dict[str, Any]:
+    """
+    Payload hoàn chỉnh cho panel: deals trong `days` ngày + summary.
+
+    Giao dịch nội bộ thưa (có mã cả quý mới có 1 lần), nên khi cửa sổ `days`
+    rỗng thì trả về các giao dịch gần nhất và bật cờ `window_empty` để UI đổi
+    nhãn thay vì hiện "không có gì".
+    """
+    symbol = symbol.strip().upper()
+    all_deals = get_insider_deals(symbol, last_n=200)
+    if not all_deals:
+        return {
+            "symbol": symbol,
+            "days": days,
+            "deals": [],
+            "summary": summarize_deals([]),
+            "period_label": f"{days} ngày qua",
+            "window_empty": False,
+        }
+
+    cutoff = (datetime.now(VN_TZ) - timedelta(days=max(1, int(days)))).date().isoformat()
+    in_window = [d for d in all_deals if (d.get("date") or "") >= cutoff]
+
+    window_empty = not in_window
+    deals = (in_window or all_deals)[: max(1, int(last_n))]
+    if window_empty:
+        newest = deals[0].get("date") or "?"
+        period_label = f"Gần nhất: {newest}"
+    else:
+        period_label = f"{days} ngày qua"
+
+    return {
+        "symbol": symbol,
+        "days": days,
+        "deals": deals,
+        "summary": summarize_deals(deals),
+        "period_label": period_label,
+        "window_empty": window_empty,
+    }
 
 
 def get_recent_insider_activity(symbols: List[str], days: int = 30) -> Dict[str, Any]:
@@ -311,16 +383,16 @@ def get_recent_insider_activity(symbols: List[str], days: int = 30) -> Dict[str,
         sell_value = 0.0
         in_window: List[Dict[str, Any]] = []
         for d in deals:
-            # Lọc theo cửa sổ ngày — nếu thiếu date_iso thì bỏ qua điều kiện
-            if d.get("date_iso") and d["date_iso"] < cutoff_iso:
+            # Lọc theo cửa sổ ngày — thiếu ngày thì giữ lại, không loại oan.
+            if d.get("date") and d["date"] < cutoff_iso:
                 continue
             in_window.append(d)
-            val = d.get("value_vnd") or 0.0
-            if d["action"] in ("BUY", "REGISTER_BUY"):
+            val = d.get("value") or 0.0
+            if d.get("type") == "BUY":
                 buy_value += val
-            elif d["action"] in ("SELL", "REGISTER_SELL"):
+            elif d.get("type") == "SELL":
                 sell_value += val
-            if d.get("is_large_trade"):
+            if val >= LARGE_TRADE_VND:
                 large_trades.append(d)
 
         net_value = buy_value - sell_value
@@ -434,20 +506,23 @@ def format_insider_for_prompt(data: Any) -> str:
         buy_total = 0.0
         sell_total = 0.0
         for i, d in enumerate(data[:10], 1):
-            person = d.get("person_name", "N/A")
-            pos = f" ({d['position']})" if d.get("position") else ""
-            vol = d.get("volume") or 0
-            val_str = _format_vnd(d.get("value_vnd"))
+            person = d.get("person") or "N/A"
+            role = f" ({d['role']})" if d.get("role") else ""
+            vol = d.get("shares") or 0
+            val = d.get("value") or 0.0
+            val_str = _format_vnd(d.get("value"))
+            if d.get("value_estimated"):
+                val_str += " (ước tính theo giá hiện tại)"
             date_str = d.get("date") or "N/A"
-            large_marker = " [LỚN]" if d.get("is_large_trade") else ""
+            status = "đăng ký" if d.get("registered") else "đã thực hiện"
+            large_marker = " [LỚN]" if val >= LARGE_TRADE_VND else ""
             lines.append(
-                f"{i}. [{date_str}] {person}{pos}: {d['action']} {vol:,} cp, "
-                f"giá trị {val_str}{large_marker}"
+                f"{i}. [{date_str}] {person}{role}: {d.get('type', 'N/A')} {vol:,} cp "
+                f"({status}), giá trị {val_str}{large_marker}"
             )
-            val = d.get("value_vnd") or 0.0
-            if d["action"] in ("BUY", "REGISTER_BUY"):
+            if d.get("type") == "BUY":
                 buy_total += val
-            elif d["action"] in ("SELL", "REGISTER_SELL"):
+            elif d.get("type") == "SELL":
                 sell_total += val
 
         net = buy_total - sell_total

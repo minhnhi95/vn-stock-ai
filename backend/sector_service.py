@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from market_service import TTLCache, VN_TZ
+from symbol_utils import is_vn_symbol
 
 try:
     from vnstock import Listing, Quote
@@ -47,11 +48,22 @@ MAX_WORKERS = 3
 # Số mã tối đa lấy mỗi ngành — giảm xuống để tổng số call < 20 với 4-6 ngành chính.
 MAX_SYMBOLS_PER_SECTOR = 3
 
+# Cấp ICB dùng làm "ngành". vnstock trả long-format: mỗi mã có 4 dòng ứng với
+# icb_level 1..4. Cấp 2 là mức người dùng nghĩ tới khi nói "ngành"
+# (Ngân hàng, Bất động sản, Bán lẻ...); cấp 1 quá rộng ("Tài chính"),
+# cấp 3-4 quá vụn. Gộp cả 4 cấp lại như trước sẽ ra heatmap có cả
+# "Tài chính" lẫn "Dịch vụ tài chính" — cha và con đứng cạnh nhau.
+ICB_SECTOR_LEVEL = 2
+
 # Tổng số ngành tối đa — chỉ tính top N ngành theo số mã (skip ngành nhỏ).
 # 8 ngành × 3 mã = 24 calls → vừa khít 20 req/min window (sẽ pause sau 20 calls).
 MAX_INDUSTRIES = 8
 
-# Fallback VN30 — đồng bộ với backtest_service.VN30_SYMBOLS để UI nhất quán.
+# % thay đổi của 1 mã chỉ đổi khi có phiên mới; cache dài để lần dựng heatmap sau
+# không phải fetch lại mã đã lấy được, dành hạn mức cho mã còn thiếu.
+SYMBOL_CHANGE_TTL_SECONDS = 1800.0
+
+# Fallback VN30 — dùng chung market_universe để UI nhất quán.
 _FALLBACK_VN30 = [
     "ACB", "BCM", "BID", "BVH", "CTG", "FPT", "GAS", "GVR", "HDB", "HPG",
     "MBB", "MSN", "MWG", "PLX", "POW", "SAB", "SHB", "SSB", "SSI", "STB",
@@ -80,6 +92,11 @@ def _safe_str(v) -> str:
         return str(v).strip() if v is not None else ""
     except Exception:
         return ""
+
+
+def _is_stock_ticker(symbol: str) -> bool:
+    """Mã cổ phiếu niêm yết VN = đúng 3 chữ cái. Loại quỹ/trái phiếu/chứng quyền."""
+    return is_vn_symbol(symbol)
 
 
 def _pick_col(df, candidates: List[str]) -> Optional[str]:
@@ -143,23 +160,46 @@ def _fetch_industries_raw() -> Optional[List[Dict[str, Any]]]:
     if df_sbi is None or df_sbi.empty:
         return None
 
-    # Cố gắng tìm cột symbol + cột tên ngành. vnstock VCI thực tế có:
-    #   symbol, icb_name1..4, icb_code1..4, organ_name, ...
-    # Ưu tiên icb_name2 (sector cấp 2) — thường là level người dùng quan tâm
-    # (Banking, Real Estate, Steel, ...). Nếu thiếu, fallback icb_name3 / icb_name1.
+    # Hai schema đã gặp ở vnstock 4.x:
+    #   (a) long-format: symbol, organ_name, com_type_code, icb_level, icb_code, icb_name
+    #       -> mỗi mã 4 dòng, phải lọc icb_level.
+    #   (b) wide-format: symbol, icb_name1..4, icb_code1..4
+    #       -> chọn thẳng cột cấp 2.
     symbol_col = _pick_col(df_sbi, ["symbol", "ticker", "code"])
-    name_col = _pick_col(df_sbi, ["icb_name2", "icb_name3", "icb_name1", "icb_name", "industry", "sector"])
-    code_col = _pick_col(df_sbi, ["icb_code2", "icb_code3", "icb_code1", "icb_code", "industry_code"])
-
-    if symbol_col is None or name_col is None:
+    if symbol_col is None:
         return None
+
+    level_col = _pick_col(df_sbi, ["icb_level", "level"])
+    if level_col is not None:
+        # (a) long-format — giữ đúng một cấp ICB.
+        name_col = _pick_col(df_sbi, ["icb_name", "industry", "sector"])
+        code_col = _pick_col(df_sbi, ["icb_code", "industry_code"])
+        if name_col is None:
+            return None
+        levels = df_sbi[level_col].astype(str).str.strip()
+        filtered = df_sbi[levels == str(ICB_SECTOR_LEVEL)]
+        if filtered.empty:
+            filtered = df_sbi[levels == "1"]  # version nào chỉ có cấp 1 thì dùng tạm
+        if filtered.empty:
+            return None
+        df_sbi = filtered
+    else:
+        # (b) wide-format — ưu tiên cấp 2, thiếu thì lùi dần.
+        name_col = _pick_col(df_sbi, ["icb_name2", "icb_name3", "icb_name1", "industry", "sector"])
+        code_col = _pick_col(df_sbi, ["icb_code2", "icb_code3", "icb_code1", "industry_code"])
+        if name_col is None:
+            return None
 
     # Gộp theo industry
     buckets: Dict[str, Dict[str, Any]] = {}
     for _, row in df_sbi.iterrows():
         sym = _safe_str(row.get(symbol_col)).upper()
         name = _safe_str(row.get(name_col))
-        if not sym or not name or name.lower() in ("nan", "none", ""):
+        # Listing trả cả chứng chỉ quỹ ("A+ Fund"), trái phiếu, chứng quyền.
+        # Mã cổ phiếu niêm yết VN luôn đúng 3 chữ cái.
+        if not _is_stock_ticker(sym):
+            continue
+        if not name or name.lower() in ("nan", "none", ""):
             continue
         code = _safe_str(row.get(code_col)) if code_col else ""
         key = name
@@ -247,7 +287,7 @@ def _fetch_index_constituents(index_name: str) -> Optional[List[str]]:
             else:
                 symbols = [_safe_str(s).upper() for s in list(res)]
 
-            symbols = [s for s in symbols if s and s.isalpha() and 2 <= len(s) <= 4]
+            symbols = [s for s in symbols if is_vn_symbol(s)]
             if symbols:
                 return symbols
         except Exception:
@@ -317,12 +357,21 @@ def _fetch_two_session_change(symbol: str) -> Optional[Dict[str, Any]]:
     if not sym:
         return None
 
+    # Cache theo TỪNG mã, không chỉ theo cả heatmap. vnstock free tier chỉ cho
+    # 20 req/phút nên mỗi lần dựng heatmap thường có vài mã bị rate-limit; nếu
+    # vứt hết kết quả đi thì lần nào cũng chỉ đủ 2-3 ngành. Giữ lại từng mã lấy
+    # được để các lần sau lấp dần cho đủ.
+    cache_key = f"change:{sym}"
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     end_dt = datetime.now(VN_TZ).date()
     start_dt = end_dt - timedelta(days=14)
     start_str = start_dt.strftime("%Y-%m-%d")
     end_str = end_dt.strftime("%Y-%m-%d")
 
-    for source in ("VCI", "TCBS", "KBS"):
+    for source in ("VCI", "KBS"):
         try:
             q = Quote(symbol=sym, source=source)
             df = q.history(start=start_str, end=end_str, interval="1D")
@@ -343,12 +392,14 @@ def _fetch_two_session_change(symbol: str) -> Optional[Dict[str, Any]]:
             # nhưng quy đổi để phía caller hiển thị tham khảo cũng nhất quán.
             last_vnd = last * 1000.0 if last < 1000 else last
 
-            return {
+            payload = {
                 "symbol": sym,
                 "price": last_vnd,
                 "change_pct": change_pct,
                 "source": source,
             }
+            _cache.set(cache_key, payload, SYMBOL_CHANGE_TTL_SECONDS)
+            return payload
         except Exception:
             continue
 
@@ -358,7 +409,7 @@ def _fetch_two_session_change(symbol: str) -> Optional[Dict[str, Any]]:
 def _fetch_changes_batch(symbols: List[str]) -> List[Dict[str, Any]]:
     """
     Pull giá song song bằng ThreadPoolExecutor (I/O bound — pattern giống
-    backtest_service.run_batch_backtest). Loại bỏ None.
+    quét song song). Loại bỏ None.
     """
     out: List[Dict[str, Any]] = []
     if not symbols:
@@ -412,19 +463,38 @@ def get_sector_heatmap() -> Dict[str, Any]:
             "sectors": [],
         }
 
-    # Limit số ngành để vừa với vnstock rate limit (20 req/min).
-    # Sort theo số mã desc và pick top MAX_INDUSTRIES.
-    industries = sorted(industries, key=lambda x: len(x.get("symbols", [])), reverse=True)[:MAX_INDUSTRIES]
+    # Chỉ lấy được giá của ~20 mã mỗi phút (vnstock free tier), nên phải chọn
+    # mã ĐẠI DIỆN chứ không phải mã đầu tiên theo bảng chữ cái: lấy đầu danh sách
+    # sẽ ra AAS/AAV/ABR/ACS — toàn penny, và "Xây dựng -9%" thực chất là một mã
+    # micro-cap. Dùng rổ VN100 làm proxy thanh khoản/vốn hoá.
+    vn100 = set(get_vn100_symbols())
 
-    # Gom tất cả mã cần fetch thành 1 set để tránh fetch trùng giữa các ngành
-    # (1 mã chỉ thuộc 1 ngành ICB cấp 2 trong thực tế, nhưng dữ liệu đôi khi
-    # bị duplicate giữa các ngành con — defensive dedup).
+    ranked = []
+    for ind in industries:
+        blue_chips = [s for s in ind.get("symbols", []) if s in vn100]
+        if not blue_chips:
+            # Ngành không có đại diện trong VN100 thì không đủ tiêu biểu để lên heatmap.
+            continue
+        ranked.append((len(blue_chips), ind, blue_chips))
+
+    if not ranked:
+        return {
+            "available": False,
+            "reason": "Không ngành nào có mã thuộc rổ VN100 để làm đại diện",
+            "sectors": [],
+        }
+
+    # Xếp hạng theo số mã VN100 trong ngành = mức độ quan trọng với thị trường,
+    # thay vì tổng số mã niêm yết (khiến ngành toàn penny xếp trên Ngân hàng).
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    ranked = ranked[:MAX_INDUSTRIES]
+    industries = [ind for _, ind, _ in ranked]
+
     all_symbols: List[str] = []
     seen: set = set()
     sector_symbols_map: Dict[str, List[str]] = {}
-    for ind in industries:
-        # Giới hạn số mã/ngành để tránh ngành lớn (Real Estate ~50 mã) làm chậm
-        picked = ind["symbols"][:MAX_SYMBOLS_PER_SECTOR]
+    for _, ind, blue_chips in ranked:
+        picked = blue_chips[:MAX_SYMBOLS_PER_SECTOR]
         sector_symbols_map[ind["name"]] = picked
         for s in picked:
             if s not in seen:
@@ -462,6 +532,9 @@ def get_sector_heatmap() -> Dict[str, Any]:
                 "symbol": top_loser["symbol"],
                 "change_pct": round(top_loser["change_pct"], 3),
             },
+            # Con số là trung bình của MẤY mã này thôi, không phải cả ngành —
+            # UI cần nói rõ để người dùng không đọc nhầm thành chỉ số ngành.
+            "symbols_used": [r["symbol"] for r in rows],
         })
 
     if not sectors_out:
@@ -478,7 +551,12 @@ def get_sector_heatmap() -> Dict[str, Any]:
         "available": True,
         "generated_at": datetime.now(VN_TZ).isoformat(),
         "sectors": sectors_out,
+        "requested_industries": len(industries),
         "cached": False,
     }
-    _cache.set("sector_heatmap", payload, HEATMAP_TTL_SECONDS)
+    # Chỉ cache khi kết quả tương đối đầy đủ. Nếu rate limit làm rụng quá nửa số
+    # ngành, để lần gọi sau thử lại — mã đã lấy được vẫn nằm trong cache riêng
+    # nên lần sau rẻ hơn nhiều.
+    if len(sectors_out) >= max(1, len(industries) // 2):
+        _cache.set("sector_heatmap", payload, HEATMAP_TTL_SECONDS)
     return payload

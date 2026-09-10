@@ -1,25 +1,38 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Search, TrendingUp, Sliders, Play, Square, Key, Bell, Compass, RefreshCw, BarChart2, Shield } from 'lucide-react';
+import { lazy, Suspense, useCallback, useState, useEffect } from 'react';
+import { Search, TrendingUp, Key, Bell, Compass, RefreshCw, Globe2 } from 'lucide-react';
 
 // Components
 import StockChart from './components/StockChart';
 import AiAnalyst from './components/AiAnalyst';
-import PortfolioTracker from './components/PortfolioTracker';
+import RealPortfolio from './components/RealPortfolio';
 import Fundamentals from './components/Fundamentals';
 import News from './components/News';
-import BacktestModal from './components/BacktestModal';
+import ErrorBoundary from './components/ErrorBoundary';
+import useModalDismiss from './hooks/useModalDismiss';
+
 import MarketPanel from './components/MarketPanel';
-import AIScanner from './components/AIScanner';
+import DailyBrief from './components/DailyBrief';
+import SafetyCheck from './components/SafetyCheck';
+const SafetyScreenModal = lazy(() => import('./components/SafetyScreenModal'));
 import AlertsManager from './components/AlertsManager';
 import CalendarPanel from './components/CalendarPanel';
 import InsiderPanel from './components/InsiderPanel';
-import PortfolioReview from './components/PortfolioReview';
-import { Activity, Radar, Briefcase } from 'lucide-react';
+const PortfolioReview = lazy(() => import('./components/PortfolioReview'));
+import { ShieldCheck, Briefcase } from 'lucide-react';
 
 // API endpoint: dev mặc định localhost; prod đặt VITE_API_BASE qua Vercel env.
 // Bỏ trailing slash để không gây double-slash khi nối path.
 const RAW_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765').replace(/\/$/, '');
 const API_BASE = `${RAW_BASE}/api`;
+
+// 4 tab mobile. Thứ tự theo việc người dùng làm nhiều nhất: xem mã -> xem thị
+// trường -> xem danh mục -> kiểm tra theo dõi.
+const MOBILE_TABS = [
+  { id: 'stock', label: 'Cổ phiếu', Icon: Compass },
+  { id: 'market', label: 'Thị trường', Icon: Globe2 },
+  { id: 'portfolio', label: 'Danh mục', Icon: Briefcase },
+  { id: 'watch', label: 'Theo dõi', Icon: Bell },
+];
 
 export default function App() {
   // Config & API Keys
@@ -36,6 +49,8 @@ export default function App() {
   const [chartData, setChartData] = useState([]);
   const [isChartLoading, setIsChartLoading] = useState(false);
   const [realtimePrice, setRealtimePrice] = useState(0);
+  // Backend trả is_intraday=false khi ngoài giờ khớp lệnh (giá = đóng cửa phiên gần nhất).
+  const [priceMeta, setPriceMeta] = useState({ isIntraday: null, time: '', source: '' });
   const [originalLastClose, setOriginalLastClose] = useState(0);
   const [priceChangePercent, setPriceChangePercent] = useState(0);
 
@@ -45,40 +60,18 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [isChatting, setIsChatting] = useState(false);
 
-  // Paper Trading Portfolio State.
-  // Server (SQLite) là source of truth. Frontend merge currentPrice (chỉ giữ ở client).
-  const INITIAL_CAPITAL = 100000000;
-  const T_PLUS_LOCK_MS = 2 * 24 * 3600 * 1000;
-  const [portfolio, setPortfolio] = useState({
-    cash: INITIAL_CAPITAL,
-    holdings: []
-  });
-  const [transactionHistory, setTransactionHistory] = useState([]);
-  const [isTrading, setIsTrading] = useState(false);
-  const [isAutoTrading, setIsAutoTrading] = useState(false);
-  const [tradingNotification, setTradingNotification] = useState(null);
-  const [nowTick, setNowTick] = useState(Date.now()); // tick mỗi 30s để refresh trạng thái khóa T+
-
-  // Risk guardrails (config qua UI).
-  const [riskConfig, setRiskConfig] = useState({
-    maxPositionPercent: 20,    // 1 mã tối đa 20% NAV
-    dailyLossLimitPercent: 3,  // bot tự dừng khi NAV giảm > 3% so với đầu phiên
-    botCashUsagePercent: 20,   // mỗi lệnh dùng 20% tiền mặt
-  });
-  const sessionStartNavRef = useRef(INITIAL_CAPITAL);
-  const [botPaused, setBotPaused] = useState(false);
-
-  // Buy/Sell Order Inputs
-  const [tradeShares, setTradeShares] = useState(100);
-
   // Market status & fundamentals & news
   const [marketStatus, setMarketStatus] = useState({ status: 'CLOSED', reason: '...', is_open: false });
   const [fundamentals, setFundamentals] = useState(null);
   const [newsItems, setNewsItems] = useState([]);
 
-  // Backtest modal
-  const [showBacktest, setShowBacktest] = useState(false);
-  const [showScanner, setShowScanner] = useState(false);
+  // Tab đang xem trên mobile. Desktop bỏ qua state này (CSS hiện tất cả).
+  const [mobileTab, setMobileTab] = useState('stock');
+
+  // Thông báo ngắn (lỗi tải dữ liệu, cập nhật API key).
+  const [toast, setToast] = useState(null);
+
+  const [showSafetyScreen, setShowSafetyScreen] = useState(false);
   const [showPortfolioReview, setShowPortfolioReview] = useState(false);
 
   // Fetch search results on mount or query change
@@ -96,36 +89,6 @@ export default function App() {
     setChatMessages([]);
   }, [selectedStock]);
 
-  // Helper: merge currentPrice từ state cũ vào holdings từ server (server không lưu giá hiện tại).
-  const mergePortfolioFromServer = (serverPortfolio, prevHoldings = []) => {
-    const priceMap = new Map(prevHoldings.map(h => [h.symbol, h.currentPrice]));
-    return {
-      cash: serverPortfolio.cash,
-      holdings: (serverPortfolio.holdings || []).map(h => ({
-        ...h,
-        currentPrice: priceMap.get(h.symbol) ?? h.avgPrice,
-      })),
-    };
-  };
-
-  // Load portfolio + transactions từ SQLite khi mở app.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/portfolio`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setPortfolio(prev => mergePortfolioFromServer(data.portfolio, prev.holdings));
-        setTransactionHistory(data.transactions || []);
-      } catch (e) {
-        // im lặng - dùng state mặc định
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
   // Poll market status mỗi 30s — chỉ điều phối, không tốn tài nguyên.
   useEffect(() => {
     let cancelled = false;
@@ -134,7 +97,7 @@ export default function App() {
         const res = await fetch(`${API_BASE}/market/status`);
         const data = await res.json();
         if (!cancelled) setMarketStatus(data);
-      } catch (e) {
+      } catch {
         // im lặng — không phá flow chính
       }
     };
@@ -142,6 +105,23 @@ export default function App() {
     const id = setInterval(tick, 30000);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
+
+  // Modal lọc an toàn dựng inline ở đây (không phải component riêng) nên gắn
+  // Escape-to-close tại App. Hai modal còn lại tự gọi hook trong file của chúng.
+  const closeSafetyScreen = useCallback(() => setShowSafetyScreen(false), []);
+  useModalDismiss(showSafetyScreen, closeSafetyScreen);
+
+  // Tiêu đề tab bám theo mã + giá — người dùng thường mở nhiều tab cho nhiều mã,
+  // và biết giá mà không cần chuyển tab là thứ app chứng khoán nào cũng có.
+  useEffect(() => {
+    const sym = selectedStock?.symbol;
+    if (!sym) return;
+    const price = realtimePrice > 0 ? realtimePrice.toLocaleString() : null;
+    const arrow = priceChangePercent > 0 ? '▲' : priceChangePercent < 0 ? '▼' : '';
+    document.title = price
+      ? `${sym} ${price} ${arrow}${priceChangePercent.toFixed(2)}% · VN Stock AI`
+      : `${sym} · VN Stock AI`;
+  }, [selectedStock, realtimePrice, priceChangePercent]);
 
   // Theo dõi tab visibility để pause polling khi user chuyển tab.
   const [isTabVisible, setIsTabVisible] = useState(() => !document.hidden);
@@ -176,10 +156,6 @@ export default function App() {
         };
         return updated;
       });
-      setPortfolio(prev => ({
-        ...prev,
-        holdings: prev.holdings.map(h => h.symbol === selectedStock.symbol ? { ...h, currentPrice: newPrice } : h),
-      }));
     };
 
     const fetchPrice = async () => {
@@ -187,9 +163,17 @@ export default function App() {
         const res = await fetch(`${API_BASE}/stocks/realtime?symbol=${encodeURIComponent(selectedStock.symbol)}`);
         if (!res.ok) return;
         const data = await res.json();
-        if (data?.price) applyPrice(Number(data.price));
-      } catch (e) {
-        // im lặng
+        if (cancelled) return;
+        if (data?.price) {
+          applyPrice(Number(data.price));
+          setPriceMeta({
+            isIntraday: data.is_intraday !== false,
+            time: data.time || '',
+            source: data.source || '',
+          });
+        }
+      } catch {
+        // im lặng — poll kế tiếp sẽ thử lại
       }
     };
 
@@ -214,84 +198,12 @@ export default function App() {
           const data = await nRes.json();
           setNewsItems(data.items || []);
         }
-      } catch (e) {
+      } catch {
         // im lặng
       }
     })();
     return () => { cancelled = true; };
   }, [selectedStock]);
-
-  // Tick mỗi 30s — cập nhật trạng thái T+ và làm tươi NAV daily-loss check.
-  useEffect(() => {
-    const id = setInterval(() => setNowTick(Date.now()), 30000);
-    return () => clearInterval(id);
-  }, []);
-
-  // Snapshot NAV đầu phiên khi bật bot (để áp dụng daily loss limit).
-  useEffect(() => {
-    if (isAutoTrading) {
-      sessionStartNavRef.current = computeNav(portfolio);
-      setBotPaused(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAutoTrading]);
-
-  // AI Auto-Trading Trigger Logic. Trigger ONCE per unique analysis + guardrails.
-  const lastTradedAnalysisRef = useRef(null);
-
-  // Reset ref khi đổi mã — tránh aiAnalysis cũ của mã trước trigger lệnh trên mã mới.
-  useEffect(() => {
-    lastTradedAnalysisRef.current = null;
-  }, [selectedStock.symbol]);
-
-  useEffect(() => {
-    if (!isAutoTrading || botPaused) return;
-    if (!aiAnalysis || !aiAnalysis.analysis) return;
-    if (lastTradedAnalysisRef.current === aiAnalysis) return;
-    if (!Number.isFinite(realtimePrice) || realtimePrice <= 0) return;
-    if (!marketStatus.is_open) return; // không trade khi đóng cửa
-
-    // Chỉ trade khi aiAnalysis là của mã đang xem (tránh stale signals).
-    const targetSymbol = aiAnalysis.symbol;
-    if (!targetSymbol || targetSymbol !== selectedStock.symbol) {
-      lastTradedAnalysisRef.current = aiAnalysis;
-      return;
-    }
-
-    // Guardrail: daily loss limit
-    const nav = computeNav(portfolio);
-    const startNav = sessionStartNavRef.current || nav;
-    const dayPL = ((nav - startNav) / startNav) * 100;
-    if (dayPL <= -riskConfig.dailyLossLimitPercent) {
-      setBotPaused(true);
-      showNotification(`[AI BOT] Tự dừng — NAV giảm ${dayPL.toFixed(2)}% (giới hạn ${-riskConfig.dailyLossLimitPercent}%).`, 'error');
-      lastTradedAnalysisRef.current = aiAnalysis;
-      return;
-    }
-
-    const rec = aiAnalysis.analysis.recommendation;
-    const conf = aiAnalysis.analysis.confidence;
-    if (conf < 80) {
-      lastTradedAnalysisRef.current = aiAnalysis;
-      return;
-    }
-
-    if (rec === 'STRONG_BUY' || rec === 'BUY') {
-      const buyPower = portfolio.cash * (riskConfig.botCashUsagePercent / 100);
-      const sharesToBuy = Math.floor(buyPower / realtimePrice);
-      if (Number.isFinite(sharesToBuy) && sharesToBuy >= 10) {
-        executeBuyOrder(targetSymbol, sharesToBuy, true);
-      }
-    } else if (rec === 'STRONG_SELL' || rec === 'SELL') {
-      const holding = portfolio.holdings.find(h => h.symbol === targetSymbol);
-      if (holding) {
-        const sellable = availableSharesOf(holding);
-        if (sellable > 0) executeSellOrder(targetSymbol, sellable, true);
-      }
-    }
-
-    lastTradedAnalysisRef.current = aiAnalysis;
-  }, [aiAnalysis, isAutoTrading, botPaused, realtimePrice, portfolio, selectedStock, marketStatus.is_open, riskConfig]);
 
   const fetchStocks = async (query) => {
     try {
@@ -335,8 +247,8 @@ export default function App() {
   };
 
   const showNotification = (msg, severity = 'info') => {
-    setTradingNotification({ msg, severity });
-    setTimeout(() => setTradingNotification(null), 4000);
+    setToast({ msg, severity });
+    setTimeout(() => setToast(null), 4000);
   };
 
   const handleRunAiAnalysis = async () => {
@@ -380,7 +292,7 @@ export default function App() {
       });
       const data = await res.json();
       setChatMessages(prev => [...prev, { role: 'ai', text: data.answer }]);
-    } catch (e) {
+    } catch {
       setChatMessages(prev => [...prev, { role: 'ai', text: 'Xin lỗi, tôi gặp lỗi kết nối với máy chủ AI.' }]);
     } finally {
       setIsChatting(false);
@@ -388,136 +300,43 @@ export default function App() {
   };
 
   // Tính cổ phiếu khả dụng (đã qua T+ lock) cho 1 holding.
-  const availableSharesOf = (holding, now = Date.now()) => {
-    if (!holding?.lots) return holding?.shares || 0;
-    return holding.lots.filter(l => (now - l.buyAt) >= T_PLUS_LOCK_MS).reduce((s, l) => s + l.shares, 0);
-  };
-  const lockedSharesOf = (holding, now = Date.now()) => (holding?.shares || 0) - availableSharesOf(holding, now);
-
-  // NAV tổng (tiền + giá thị trường * shares)
-  const computeNav = (port) =>
-    port.cash + port.holdings.reduce((sum, h) => sum + h.shares * h.currentPrice, 0);
-
-  const executeBuyOrder = async (symbol, shares, isAi = false) => {
-    const cost = shares * realtimePrice;
-    if (cost > portfolio.cash) {
-      if (!isAi) showNotification('Số dư khả dụng không đủ để thực hiện lệnh mua này!', 'error');
-      return false;
+  const priceSourceLabel = (() => {
+    if (priceMeta.isIntraday === false) {
+      const day = String(priceMeta.time || '').split(' ')[0];
+      return day ? `Đóng cửa ${day}` : 'Đóng cửa phiên trước';
     }
-    const nav = computeNav(portfolio);
-    const currentPosValue = (portfolio.holdings.find(h => h.symbol === symbol)?.shares || 0) * realtimePrice;
-    const newPosValue = currentPosValue + cost;
-    const maxAllowed = (nav * riskConfig.maxPositionPercent) / 100;
-    if (newPosValue > maxAllowed) {
-      const reason = `Vượt giới hạn position size: ${(newPosValue / nav * 100).toFixed(1)}% > ${riskConfig.maxPositionPercent}% NAV.`;
-      if (!isAi) showNotification(reason, 'error');
-      else console.log('[AI BOT] Bỏ qua lệnh mua —', reason);
-      return false;
-    }
-
-    setIsTrading(true);
-    try {
-      const res = await fetch(`${API_BASE}/portfolio/buy`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, shares, price: realtimePrice, executor: isAi ? 'AI' : 'USER' }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        showNotification(`Lệnh mua thất bại: ${data.detail || res.status}`, 'error');
-        return false;
-      }
-      setPortfolio(prev => mergePortfolioFromServer(data.portfolio, prev.holdings));
-      setTransactionHistory(data.transactions || []);
-      showNotification(`${isAi ? '[AI BOT] ' : ''}Khớp lệnh MUA ${shares} CP ${symbol} giá ${realtimePrice.toLocaleString()} đ (khóa T+2)`);
-      return true;
-    } catch (e) {
-      showNotification(`Lỗi mạng khi đặt lệnh mua: ${e.message}`, 'error');
-      return false;
-    } finally {
-      setIsTrading(false);
-    }
-  };
-
-  const executeSellOrder = async (symbol, shares, isAi = false) => {
-    const holding = portfolio.holdings.find(h => h.symbol === symbol);
-    if (!holding) {
-      if (!isAi) showNotification('Bạn không nắm giữ cổ phiếu này!', 'error');
-      return false;
-    }
-    const avail = availableSharesOf(holding, Date.now());
-    if (avail < shares) {
-      const locked = holding.shares - avail;
-      const reason = `Chỉ có ${avail} CP khả dụng — ${locked} CP đang bị khóa T+.`;
-      if (!isAi) showNotification(reason, 'error');
-      else console.log('[AI BOT] Bỏ qua lệnh bán —', reason);
-      return false;
-    }
-
-    setIsTrading(true);
-    try {
-      const res = await fetch(`${API_BASE}/portfolio/sell`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, shares, price: realtimePrice, executor: isAi ? 'AI' : 'USER' }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        showNotification(`Lệnh bán thất bại: ${data.detail || res.status}`, 'error');
-        return false;
-      }
-      setPortfolio(prev => mergePortfolioFromServer(data.portfolio, prev.holdings));
-      setTransactionHistory(data.transactions || []);
-      showNotification(`${isAi ? '[AI BOT] ' : ''}Khớp lệnh BÁN ${shares} CP ${symbol} giá ${realtimePrice.toLocaleString()} đ`);
-      return true;
-    } catch (e) {
-      showNotification(`Lỗi mạng khi đặt lệnh bán: ${e.message}`, 'error');
-      return false;
-    } finally {
-      setIsTrading(false);
-    }
-  };
-
-  const resetPortfolio = async () => {
-    if (!window.confirm('Xác nhận reset portfolio về 100 triệu? Toàn bộ holdings và lịch sử sẽ xóa.')) return;
-    try {
-      const res = await fetch(`${API_BASE}/portfolio/reset`, { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setPortfolio({ cash: data.portfolio.cash, holdings: [] });
-      setTransactionHistory([]);
-      showNotification('Đã reset portfolio về 100 triệu.');
-    } catch (e) {
-      showNotification(`Reset thất bại: ${e.message}`, 'error');
-    }
-  };
+    return marketStatus.is_open ? 'Khớp lệnh · 5s' : 'Khớp lệnh gần nhất';
+  })();
 
   return (
     <div className="app-container">
       {/* Header */}
       <header className="glass-panel app-header">
         <div className="logo-section">
-          <TrendingUp className="logo-icon" size={26} />
-          <span className="logo-text">VN STOCK AI ANALYZER</span>
+          <TrendingUp className="logo-icon" size={24} />
+          <span className="logo-text">VN STOCK AI</span>
+        </div>
+
+        {/* Global Live Ticker Info */}
+        <div className="header-stats">
           <span className={`market-badge market-${marketStatus.status?.toLowerCase()}`}>
             <span className="market-dot" />
             {marketStatus.status === 'OPEN' ? 'Đang mở' : marketStatus.status === 'LUNCH' ? 'Nghỉ trưa' : 'Đóng cửa'}
             <span className="market-reason">— {marketStatus.reason}</span>
           </span>
-        </div>
-
-        {/* Global Live Ticker Info */}
-        <div className="header-stats">
           <div className="stat-item">
             <span className="stat-label">Cổ phiếu đang xem</span>
             <span className="stat-value" style={{ fontWeight: '700', letterSpacing: '0.5px' }}>
-              {selectedStock.symbol} ({selectedStock.exchange})
+              {selectedStock.symbol}
+              {selectedStock.sector || selectedStock.exchange
+                ? ` (${selectedStock.sector || selectedStock.exchange})`
+                : ''}
             </span>
           </div>
           <div className="stat-item">
-            <span className="stat-label">Giá thị trường ({marketStatus.is_open ? 'Live · 5s' : 'Cached'})</span>
+            <span className="stat-label">Giá thị trường ({priceSourceLabel})</span>
             <span className="stat-value font-display" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span className="pulse-indicator buy"></span>
+              <span className={`pulse-indicator ${priceMeta.isIntraday === false ? '' : 'buy'}`}></span>
               {realtimePrice > 0 ? realtimePrice.toLocaleString() : '---'} đ
             </span>
           </div>
@@ -530,62 +349,37 @@ export default function App() {
         </div>
 
         {/* Global actions */}
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div className="header-actions">
           <button 
-            className={`btn btn-outline ${apiKey ? 'active-key' : ''}`} 
+            className={`btn btn-outline header-btn ${apiKey ? 'active-key' : ''}`}
             onClick={() => {
               setKeyInputTemp(apiKey);
               setShowKeyInput(!showKeyInput);
             }}
-            style={{ padding: '8px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: 6 }}
+            title={apiKey ? 'Gemini API đã kết nối' : 'Cấu hình API Key'}
           >
             <Key size={14} style={{ color: apiKey ? 'var(--color-buy)' : 'inherit' }} />
-            <span>{apiKey ? 'Gemini API Connected' : 'Cấu hình API Key'}</span>
+            <span className="header-btn-label">{apiKey ? 'API Key' : 'API Key'}</span>
           </button>
 
           <button
-            className="btn btn-outline"
-            onClick={() => setShowScanner(true)}
-            style={{ padding: '8px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: 6 }}
+            className="btn btn-outline header-btn"
+            onClick={() => setShowSafetyScreen(true)}
+            title="Kiểm tra an toàn nhiều mã"
           >
-            <Radar size={14} />
-            <span>AI Scanner</span>
+            <ShieldCheck size={14} />
+            <span className="header-btn-label">Lọc an toàn</span>
           </button>
 
           <button
-            className="btn btn-outline"
+            className="btn btn-outline header-btn"
             onClick={() => setShowPortfolioReview(true)}
-            style={{ padding: '8px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: 6 }}
+            title="Đánh giá rủi ro danh mục"
           >
             <Briefcase size={14} />
-            <span>Review danh mục</span>
+            <span className="header-btn-label">Danh mục</span>
           </button>
 
-          <button
-            className="btn btn-outline"
-            onClick={() => setShowBacktest(true)}
-            style={{ padding: '8px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: 6 }}
-          >
-            <Activity size={14} />
-            <span>Backtest</span>
-          </button>
-
-          <button
-            className={`btn ${isAutoTrading ? 'btn-sell glowing' : 'btn-outline'}`}
-            onClick={() => {
-              if (!apiKey) {
-                showNotification('Vui lòng cấu hình Gemini API Key trước khi kích hoạt Auto-Trading!', 'error');
-                setShowKeyInput(true);
-                return;
-              }
-              setIsAutoTrading(!isAutoTrading);
-              showNotification(isAutoTrading ? 'Đã tắt Bot tự động giao dịch' : 'Đã bật Bot tự động giao dịch AI!');
-            }}
-            style={{ padding: '8px 14px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: 6 }}
-          >
-            {isAutoTrading ? <Square size={12} /> : <Play size={12} />}
-            <span>{isAutoTrading ? 'Dừng AI Auto-Bot' : 'Kích hoạt AI Auto-Bot'}</span>
-          </button>
         </div>
       </header>
 
@@ -609,291 +403,241 @@ export default function App() {
       )}
 
       {/* Global Notifications popup */}
-      {tradingNotification && (
-        <div className={`notification-banner notification-${tradingNotification.severity || 'info'}`}>
+      {toast && (
+        <div className={`notification-banner notification-${toast.severity || 'info'}`}>
           <Bell size={16} />
-          <span>{tradingNotification.msg}</span>
+          <span>{toast.msg}</span>
         </div>
       )}
 
       {/* Dashboard Body */}
-      <main className="dashboard-grid">
+      <main className={`dashboard-grid mobile-tab-${mobileTab}`}>
         
         {/* Column 1: Search, Watchlist, & Manual Trading Panel */}
         <section className="column">
-          {/* Market overview - foreign trade + sector heatmap */}
-          <MarketPanel apiBase={API_BASE} />
-
-          {/* Search Box */}
-          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
-            <div className="panel-header">
-              <div className="panel-title">
-                <Search size={16} className="text-accent" />
-                <span>Tìm kiếm & Watchlist</span>
-              </div>
-            </div>
-            <div className="panel-content" style={{ gap: 10 }}>
-              <div className="search-input-wrapper">
-                <input 
-                  type="text" 
-                  placeholder="Nhập mã cổ phiếu VN (ví dụ: FPT, HPG, SSI)..." 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
-              
-              {/* Search dropdown results */}
-              {searchQuery && searchResults.length > 0 && (
-                <div className="search-results-dropdown">
-                  {searchResults.map((stock, i) => (
-                    <div 
-                      className="search-result-row"
-                      key={i} 
-                      onClick={() => {
-                        setSelectedStock(stock);
-                        setSearchQuery('');
-                      }}
-                    >
-                      <span className="ticker font-display">{stock.symbol}</span>
-                      <span className="name">{stock.name}</span>
-                      <span className="exchange">{stock.exchange}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Default Watchlist */}
-              <div className="watchlist-wrapper">
-                <div className="sub-label">Cổ phiếu Phổ biến VN</div>
-                <div className="watchlist-list">
-                  {[
-                    { symbol: 'FPT', name: 'FPT Corp', exchange: 'HOSE' },
-                    { symbol: 'HPG', name: 'Tập đoàn Hòa Phát', exchange: 'HOSE' },
-                    { symbol: 'TCB', name: 'Techcombank', exchange: 'HOSE' },
-                    { symbol: 'VNM', name: 'Vinamilk', exchange: 'HOSE' },
-                    { symbol: 'SSI', name: 'Chứng khoán SSI', exchange: 'HOSE' },
-                    { symbol: 'VND', name: 'Chứng khoán VNDIRECT', exchange: 'HOSE' }
-                  ].map((stock, i) => (
-                    <div 
-                      key={i} 
-                      className={`watchlist-item ${selectedStock.symbol === stock.symbol ? 'active' : ''}`}
-                      onClick={() => setSelectedStock(stock)}
-                    >
-                      <span className="item-symbol font-display">{stock.symbol}</span>
-                      <span className="item-name">{stock.name}</span>
-                      <span className="item-exchange">{stock.exchange}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+          <div className="panel-slot" data-tab="market">
+  <ErrorBoundary name="Bản tin sáng nay">
+              <DailyBrief
+                apiBase={API_BASE}
+                onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
+              />
+            </ErrorBoundary>
           </div>
 
-          {/* Quick Manual Trade Board */}
-          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
-            <div className="panel-header">
-              <div className="panel-title">
-                <BarChart2 size={16} className="text-accent" />
-                <span>Đặt lệnh thủ công</span>
-              </div>
-            </div>
-            <div className="panel-content" style={{ gap: 14 }}>
-              <div className="trading-fields">
-                <div className="field-group">
-                  <label>Mã giao dịch</label>
-                  <input type="text" value={selectedStock.symbol} disabled />
+          <div className="panel-slot" data-tab="market">
+  {/* Market overview - foreign trade + sector heatmap */}
+            <ErrorBoundary name="Toàn cảnh thị trường">
+              <MarketPanel apiBase={API_BASE} />
+            </ErrorBoundary>
+          </div>
+
+          <div className="panel-slot" data-tab="stock">
+  {/* Search Box */}
+            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+              <div className="panel-header">
+                <div className="panel-title">
+                  <Search size={16} className="text-accent" />
+                  <span>Tìm kiếm & Watchlist</span>
                 </div>
-                <div className="field-group">
-                  <label>Số lượng</label>
+              </div>
+              <div className="panel-content" style={{ gap: 10 }}>
+                <div className="search-input-wrapper">
                   <input 
-                    type="number" 
-                    min="1" 
-                    value={tradeShares} 
-                    onChange={(e) => setTradeShares(Math.max(1, parseInt(e.target.value) || 1))} 
+                    type="text" 
+                    placeholder="Tìm mã, tên công ty hoặc ngành (FPT, Hòa Phát, ngân hàng)..." 
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
                   />
                 </div>
+              
+                {/* Search dropdown results */}
+                {searchQuery && searchResults.length > 0 && (
+                  <div className="search-results-dropdown">
+                    {searchResults.map((stock, i) => (
+                      <div 
+                        className="search-result-row"
+                        key={i} 
+                        onClick={() => {
+                          setSelectedStock(stock);
+                          setSearchQuery('');
+                        }}
+                      >
+                        <span className="ticker font-display">{stock.symbol}</span>
+                        <span className="name">{stock.name}</span>
+                        <span className="exchange">{stock.sector || stock.exchange || ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Default Watchlist */}
+                <div className="watchlist-wrapper">
+                  <div className="sub-label">Cổ phiếu Phổ biến VN</div>
+                  <div className="watchlist-list">
+                    {[
+                      { symbol: 'FPT', name: 'FPT Corp', exchange: 'HOSE' },
+                      { symbol: 'HPG', name: 'Tập đoàn Hòa Phát', exchange: 'HOSE' },
+                      { symbol: 'TCB', name: 'Techcombank', exchange: 'HOSE' },
+                      { symbol: 'VNM', name: 'Vinamilk', exchange: 'HOSE' },
+                      { symbol: 'SSI', name: 'Chứng khoán SSI', exchange: 'HOSE' },
+                      { symbol: 'VND', name: 'Chứng khoán VNDIRECT', exchange: 'HOSE' }
+                    ].map((stock, i) => (
+                      <div 
+                        key={i} 
+                        className={`watchlist-item ${selectedStock.symbol === stock.symbol ? 'active' : ''}`}
+                        onClick={() => setSelectedStock(stock)}
+                      >
+                        <span className="item-symbol font-display">{stock.symbol}</span>
+                        <span className="item-name">{stock.name}</span>
+                        <span className="item-exchange">{stock.exchange}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <div className="trading-stats-row">
-                <span>Tổng giá trị lệnh:</span>
-                <span className="font-display font-bold">
-                  {(tradeShares * realtimePrice).toLocaleString()} đ
-                </span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <button className="btn btn-buy" onClick={() => executeBuyOrder(selectedStock.symbol, tradeShares)} disabled={isTrading}>
-                  {isTrading ? '...' : 'MUA VÀO'}
-                </button>
-                <button className="btn btn-sell" onClick={() => executeSellOrder(selectedStock.symbol, tradeShares)} disabled={isTrading}>
-                  {isTrading ? '...' : 'BÁN RA'}
-                </button>
-              </div>
-              <button
-                className="btn btn-outline"
-                onClick={resetPortfolio}
-                style={{ padding: '6px', fontSize: '11px', marginTop: '4px' }}
-              >
-                Reset portfolio về 100tr
-              </button>
             </div>
           </div>
 
-          {/* Fundamentals Panel */}
-          <Fundamentals data={fundamentals} symbol={selectedStock.symbol} />
-
-          {/* News Panel */}
-          <News items={newsItems} symbol={selectedStock.symbol} apiBase={API_BASE} apiKey={apiKey} />
-
-          {/* Risk Config Panel */}
-          <div className="glass-panel">
-            <div className="panel-header">
-              <div className="panel-title">
-                <Shield size={16} className="text-accent" />
-                <span>Quản trị rủi ro (AI Bot)</span>
-              </div>
-              {botPaused ? <span className="bot-paused">Bot đang tạm dừng</span> : null}
-            </div>
-            <div className="panel-content risk-grid">
-              <div className="risk-field">
-                <label>Max 1 mã (% NAV)</label>
-                <input
-                  type="number" min="5" max="100"
-                  value={riskConfig.maxPositionPercent}
-                  onChange={(e) => setRiskConfig(c => ({ ...c, maxPositionPercent: Math.max(5, Math.min(100, Number(e.target.value) || 20)) }))}
-                />
-              </div>
-              <div className="risk-field">
-                <label>Daily loss limit (%)</label>
-                <input
-                  type="number" min="1" max="20"
-                  value={riskConfig.dailyLossLimitPercent}
-                  onChange={(e) => setRiskConfig(c => ({ ...c, dailyLossLimitPercent: Math.max(1, Math.min(20, Number(e.target.value) || 3)) }))}
-                />
-              </div>
-              <div className="risk-field">
-                <label>Cash mỗi lệnh (%)</label>
-                <input
-                  type="number" min="5" max="100"
-                  value={riskConfig.botCashUsagePercent}
-                  onChange={(e) => setRiskConfig(c => ({ ...c, botCashUsagePercent: Math.max(5, Math.min(100, Number(e.target.value) || 20)) }))}
-                />
-              </div>
-              {botPaused ? (
-                <button className="btn btn-primary risk-resume" onClick={() => {
-                  sessionStartNavRef.current = computeNav(portfolio);
-                  setBotPaused(false);
-                  showNotification('Đã reset NAV mốc và tiếp tục bot.');
-                }}>Reset & tiếp tục</button>
-              ) : null}
-            </div>
+          <div className="panel-slot" data-tab="stock">
+  <ErrorBoundary name="Kiểm tra an toàn">
+              <SafetyCheck apiBase={API_BASE} symbol={selectedStock.symbol} />
+            </ErrorBoundary>
           </div>
 
-          {/* Lịch sự kiện 30 ngày — chỉ filter portfolio + watchlist */}
-          <CalendarPanel
-            apiBase={API_BASE}
-            watchlistSymbols={[
-              ...new Set([
-                ...portfolio.holdings.map(h => h.symbol),
-                'FPT', 'HPG', 'TCB', 'VNM', 'SSI', 'VND',
-              ]),
-            ]}
-          />
+          <div className="panel-slot" data-tab="stock">
+  {/* Fundamentals Panel */}
+            <ErrorBoundary name="Cơ bản doanh nghiệp">
+              <Fundamentals data={fundamentals} symbol={selectedStock.symbol} />
+            </ErrorBoundary>
+          </div>
 
-          {/* Alerts engine */}
-          <AlertsManager apiBase={API_BASE} />
+          <div className="panel-slot" data-tab="stock">
+  {/* News Panel */}
+            <ErrorBoundary name="Tin tức">
+              <News items={newsItems} symbol={selectedStock.symbol} apiBase={API_BASE} apiKey={apiKey} />
+            </ErrorBoundary>
+          </div>
+
+          <div className="panel-slot" data-tab="watch">
+  <CalendarPanel
+              apiBase={API_BASE}
+              watchlistSymbols={[
+                ...new Set([selectedStock.symbol, 'FPT', 'HPG', 'TCB', 'VNM', 'SSI', 'VND']),
+              ]}
+            />
+          </div>
+
+          <div className="panel-slot" data-tab="watch">
+  {/* Alerts engine */}
+            <ErrorBoundary name="Cảnh báo">
+              <AlertsManager apiBase={API_BASE} marketOpen={marketStatus.is_open} />
+            </ErrorBoundary>
+          </div>
         </section>
 
         {/* Column 2: Main Chart & Portfolio */}
         <section className="main-column">
-          {/* Stock Chart Panel */}
-          <div className="glass-panel" style={{ flexGrow: 1, minHeight: '400px', display: 'flex', flexDirection: 'column' }}>
-            <div className="panel-header">
-              <div className="panel-title">
-                <Compass size={18} className="logo-icon" />
-                <span>Biểu đồ kỹ thuật: {selectedStock.symbol} - {selectedStock.name}</span>
+          <div className="panel-slot" data-tab="stock">
+  {/* Stock Chart Panel */}
+            <div className="glass-panel chart-panel">
+              <div className="panel-header">
+                <div className="panel-title">
+                  <Compass size={18} className="logo-icon" />
+                  <span>Biểu đồ kỹ thuật: {selectedStock.symbol} - {selectedStock.name}</span>
+                </div>
+                {isChartLoading && (
+                  <div className="loading-indicator">
+                    <RefreshCw className="spin-icon" size={14} />
+                    <span>Đang tải...</span>
+                  </div>
+                )}
               </div>
-              {isChartLoading && (
-                <div className="loading-indicator">
-                  <RefreshCw className="spin-icon" size={14} />
-                  <span>Đang tải...</span>
-                </div>
-              )}
-            </div>
-            <div className="panel-content" style={{ padding: '8px', justifyContent: 'center' }}>
-              {!isChartLoading && chartData.length > 0 ? (
-                <StockChart data={chartData} symbol={selectedStock.symbol} />
-              ) : (
-                <div style={{ color: 'var(--text-muted)', textAlign: 'center', fontSize: '13px' }}>
-                  {isChartLoading ? 'Đang chuẩn bị dữ liệu...' : 'Không có dữ liệu biểu đồ.'}
-                </div>
-              )}
+              <div className="panel-content chart-panel-content">
+                {!isChartLoading && chartData.length > 0 ? (
+                  <ErrorBoundary name="Biểu đồ kỹ thuật">
+                    <StockChart data={chartData} symbol={selectedStock.symbol} />
+                  </ErrorBoundary>
+                ) : (
+                  <div style={{ color: 'var(--text-muted)', textAlign: 'center', fontSize: '13px' }}>
+                    {isChartLoading ? 'Đang chuẩn bị dữ liệu...' : 'Không có dữ liệu biểu đồ.'}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Portfolio & History Tracker Panel */}
-          <PortfolioTracker
-            portfolio={portfolio}
-            transactionHistory={transactionHistory}
-            nowTick={nowTick}
-            onSellHolding={(symbol) => {
-              const holding = portfolio.holdings.find(h => h.symbol === symbol);
-              if (!holding) return;
-              const sellable = availableSharesOf(holding);
-              if (sellable > 0) executeSellOrder(symbol, sellable);
-            }}
-          />
+          <div className="panel-slot" data-tab="portfolio">
+  <ErrorBoundary name="Danh mục thật">
+              <RealPortfolio apiBase={API_BASE} />
+            </ErrorBoundary>
+          </div>
+
         </section>
 
         {/* Column 3: AI Analyst Panel + Insider deals */}
         <section className="column">
-          <AiAnalyst
-            analysisData={aiAnalysis}
-            isAnalyzing={isAnalyzing}
-            onRunAnalysis={handleRunAiAnalysis}
-            chatMessages={chatMessages}
-            onSendMessage={handleSendMessage}
-            isChatting={isChatting}
-          />
+          <div className="panel-slot" data-tab="stock">
+  <AiAnalyst
+              analysisData={aiAnalysis}
+              isAnalyzing={isAnalyzing}
+              onRunAnalysis={handleRunAiAnalysis}
+              chatMessages={chatMessages}
+              onSendMessage={handleSendMessage}
+              isChatting={isChatting}
+            />
+          </div>
 
-          {/* Giao dịch nội bộ cho mã đang xem */}
-          <InsiderPanel apiBase={API_BASE} symbol={selectedStock.symbol} />
+          <div className="panel-slot" data-tab="stock">
+  {/* Giao dịch nội bộ cho mã đang xem */}
+            <ErrorBoundary name="Giao dịch nội bộ">
+              <InsiderPanel apiBase={API_BASE} symbol={selectedStock.symbol} />
+            </ErrorBoundary>
+          </div>
         </section>
 
       </main>
 
-      <BacktestModal
-        open={showBacktest}
-        onClose={() => setShowBacktest(false)}
-        defaultSymbol={selectedStock.symbol}
-        apiBase={API_BASE}
-      />
-
-      {/* AI Scanner modal */}
-      {showScanner && (
-        <div className="scanner-backdrop" onClick={() => setShowScanner(false)}>
-          <div className="scanner-modal glass-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="scanner-modal-header">
-              <span>AI Scanner</span>
-              <button className="scanner-modal-close" onClick={() => setShowScanner(false)}>×</button>
-            </div>
-            <AIScanner
-              apiBase={API_BASE}
-              apiKey={apiKey}
-              onSelectSymbol={(sym) => {
-                setSelectedStock({ symbol: sym, name: sym, exchange: 'HOSE' });
-                setShowScanner(false);
+      <nav className="mobile-nav" aria-label="Điều hướng">
+        {MOBILE_TABS.map((tab) => {
+          const Icon = tab.Icon;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              className={`mobile-nav-btn ${mobileTab === tab.id ? 'active' : ''}`}
+              onClick={() => {
+                setMobileTab(tab.id);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-            />
-          </div>
-        </div>
-      )}
+              aria-current={mobileTab === tab.id ? 'page' : undefined}
+            >
+              <Icon size={18} />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </nav>
 
-      {/* Portfolio Review modal */}
-      <PortfolioReview
-        open={showPortfolioReview}
-        onClose={() => setShowPortfolioReview(false)}
-        apiBase={API_BASE}
-        apiKey={apiKey}
-      />
+      <Suspense fallback={null}>
+        {showSafetyScreen ? (
+          <SafetyScreenModal
+            apiBase={API_BASE}
+            open={showSafetyScreen}
+            onClose={closeSafetyScreen}
+            onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
+          />
+        ) : null}
+
+        {/* Portfolio Review modal */}
+        {showPortfolioReview ? (
+          <PortfolioReview
+            open={showPortfolioReview}
+            onClose={() => setShowPortfolioReview(false)}
+            apiBase={API_BASE}
+            apiKey={apiKey}
+          />
+        ) : null}
+      </Suspense>
 
       {/* Embedded page styles */}
       <style>{`
@@ -1123,34 +867,34 @@ export default function App() {
           font-weight: 700;
         }
 
-        /* AI Scanner modal wrapper */
-        .scanner-backdrop {
+        /* Modal lọc an toàn nhiều mã */
+        .safety-modal-backdrop {
           position: fixed; inset: 0; z-index: 200;
           background: rgba(2, 6, 23, 0.7);
           backdrop-filter: blur(4px);
           display: flex; align-items: center; justify-content: center;
           animation: fade-in 0.2s ease-out;
         }
-        .scanner-modal {
+        .safety-modal {
           width: min(1000px, 94vw);
           max-height: 92vh;
           padding: 18px 22px;
           display: flex; flex-direction: column;
           overflow-y: auto;
         }
-        .scanner-modal-header {
+        .safety-modal-header {
           display: flex; align-items: center; justify-content: space-between;
           margin-bottom: 12px;
           font-family: var(--font-display);
           font-weight: 700;
           font-size: 16px;
         }
-        .scanner-modal-close {
+        .safety-modal-close {
           background: transparent; border: none; color: var(--text-muted);
           cursor: pointer; font-size: 24px; line-height: 1;
           padding: 0 8px;
         }
-        .scanner-modal-close:hover { color: var(--text-primary); }
+        .safety-modal-close:hover { color: var(--text-primary); }
 
         /* Risk Config */
         .risk-grid {
@@ -1201,8 +945,11 @@ export default function App() {
           display: inline-flex;
           align-items: center;
           gap: 6px;
-          margin-left: 14px;
+          /* Badge giờ nằm trong cụm số liệu (đã có gap riêng), không phải sát
+             logo như trước — margin-left thừa sẽ đẩy lệch cả dải ticker. */
           padding: 4px 10px;
+          white-space: nowrap;
+          flex: 0 0 auto;
           border-radius: 999px;
           font-size: 11px;
           font-weight: 600;
@@ -1219,6 +966,11 @@ export default function App() {
           font-weight: 400;
           opacity: 0.75;
           font-size: 10px;
+        }
+        /* Trên điện thoại chỉ giữ trạng thái; lý do ("Phiên chiều") làm pill
+           xuống 2 dòng trong dải ticker. */
+        @media (max-width: 640px) {
+          .market-badge .market-reason { display: none; }
         }
         .market-open {
           background: rgba(16, 185, 129, 0.12);

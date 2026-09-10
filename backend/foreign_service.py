@@ -15,15 +15,18 @@ Exports:
     Tiếng Việt, để inject vào AI prompt.
 
 Chiến lược fetch:
-1. vnstock 4.0.4 Quote.history() có cột foreign_buy_volume / foreign_sell_volume
-   ở một số source — thử trước.
-2. Fallback: scrape CafeF (RSS + endpoint thống kê khối ngoại) khi vnstock fail.
-3. Cuối cùng: trả {available: false, reason: "..."} để caller xử lý gracefully.
+1. Trading.price_board(symbols) — nguồn chính. Trả foreign_buy_volume /
+   foreign_sell_volume / foreign_buy_value / foreign_sell_value của phiên hiện
+   tại, và nhận NHIỀU mã trong MỘT request (quan trọng: vnstock free tier chỉ
+   cho 20 req/phút, nên xếp hạng cả VN100 vẫn chỉ tốn 1 call).
+2. Quote.history() — một số source có cột foreign, dùng để lấy chuỗi 5 phiên.
+3. Fallback: RSS CafeF/Vietstock — chỉ định tính (mã có được nhắc tới không).
+4. Cuối cùng: trả {available: false, reason: "..."} để caller xử lý gracefully.
 
-LƯU Ý từ probe Phase 1:
-- Trading(symbol, source='VCI').foreign_trade() FAIL với NotImplementedError.
-- Quote.history() có thể có một số cột foreign tuỳ source/version → thử
-  defensive parse dataframe columns.
+LƯU Ý:
+- Trading(symbol, source='VCI').foreign_trade() FAIL với NotImplementedError —
+  đừng nhầm với price_board(), method này thì chạy.
+- price_board trả MultiIndex columns dạng ('match', 'foreign_buy_volume').
 """
 from __future__ import annotations
 
@@ -41,6 +44,12 @@ try:
     HAS_QUOTE = True
 except ImportError:
     HAS_QUOTE = False
+
+try:
+    from vnstock import Trading
+    HAS_TRADING = True
+except ImportError:
+    HAS_TRADING = False
 
 
 # ---------- Cấu hình ----------
@@ -118,7 +127,7 @@ def _date_n_days_ago(n: int) -> str:
 def _fetch_foreign_via_vnstock(symbol: str) -> Optional[Dict[str, Any]]:
     """
     Thử Quote.history() với hi vọng dataframe có cột foreign_buy / foreign_sell.
-    vnstock 4.0.4 ở source VCI/TCBS đôi khi expose các cột này.
+    vnstock 4.x ở source VCI/KBS đôi khi expose các cột này.
     Trả None nếu schema không có data khối ngoại.
     """
     if not HAS_QUOTE:
@@ -129,7 +138,7 @@ def _fetch_foreign_via_vnstock(symbol: str) -> Optional[Dict[str, Any]]:
     end = _today_vn_str()
     last_error: Optional[str] = None
 
-    for source in ("VCI", "TCBS"):
+    for source in ("VCI", "KBS"):
         try:
             q = Quote(symbol=symbol, source=source)
             df = q.history(start=start, end=end, interval="1D")
@@ -185,6 +194,108 @@ def _fetch_foreign_via_vnstock(symbol: str) -> Optional[Dict[str, Any]]:
     if last_error:
         print(f"[foreign] vnstock fail for {symbol}: {last_error}")
     return None
+
+
+def _flatten_price_board(df):
+    """
+    price_board trả MultiIndex columns ('match', 'foreign_buy_volume').
+    Ép về tên phẳng, ưu tiên tên cấp cuối để lookup đơn giản.
+    """
+    flat = {}
+    for col in df.columns:
+        name = col[-1] if isinstance(col, tuple) else str(col)
+        # Giữ cột đầu tiên khi trùng tên cấp cuối (vd 'bid_count' có ở 2 nhóm).
+        flat.setdefault(str(name), col)
+    return flat
+
+
+def fetch_price_board(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Bảng giá phiên hiện tại cho nhiều mã trong MỘT request.
+
+    Tên public để module khác dùng lại được: price_board là cách rẻ nhất để lấy
+    giá + khối lượng của cả trăm mã cùng lúc, không riêng gì khối ngoại
+    (jobs/sector_benchmarks.py dùng nó để xếp hạng thanh khoản theo ngành).
+    """
+    return _fetch_foreign_via_price_board(symbols)
+
+
+def _fetch_foreign_via_price_board(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Một request cho nhiều mã. Trả map {symbol: {...}}; mã nào thiếu số liệu thì
+    không xuất hiện trong map (caller tự quyết định fallback).
+    """
+    if not HAS_TRADING or not symbols:
+        return {}
+
+    wanted = [s.strip().upper() for s in symbols if s and s.strip()]
+    if not wanted:
+        return {}
+
+    for source in ("VCI", "KBS"):
+        try:
+            df = Trading(source=source).price_board(wanted)
+            if df is None or df.empty:
+                continue
+
+            cols = _flatten_price_board(df)
+            symbol_col = cols.get("symbol")
+            buy_vol_col = cols.get("foreign_buy_volume")
+            sell_vol_col = cols.get("foreign_sell_volume")
+            if symbol_col is None or buy_vol_col is None or sell_vol_col is None:
+                continue
+
+            buy_val_col = cols.get("foreign_buy_value")
+            sell_val_col = cols.get("foreign_sell_value")
+            price_col = cols.get("match_price")
+            acc_vol_col = cols.get("accumulated_volume")
+            room_col = cols.get("current_room")
+            total_room_col = cols.get("total_room")
+
+            out: Dict[str, Dict[str, Any]] = {}
+            for _, row in df.iterrows():
+                sym = str(row.get(symbol_col, "")).strip().upper()
+                if not sym:
+                    continue
+                buy_vol = _safe_int(row.get(buy_vol_col)) or 0
+                sell_vol = _safe_int(row.get(sell_vol_col)) or 0
+                if buy_vol == 0 and sell_vol == 0:
+                    # Chưa có giao dịch khối ngoại nào — vẫn ghi nhận là 0, không
+                    # bỏ qua, vì "khối ngoại đứng ngoài" cũng là thông tin.
+                    pass
+                buy_val = _safe_float(row.get(buy_val_col)) if buy_val_col else None
+                sell_val = _safe_float(row.get(sell_val_col)) if sell_val_col else None
+
+                entry: Dict[str, Any] = {
+                    "symbol": sym,
+                    "buy_volume": buy_vol,
+                    "sell_volume": sell_vol,
+                    "net_volume": buy_vol - sell_vol,
+                }
+                if buy_val is not None or sell_val is not None:
+                    entry["buy_value"] = buy_val or 0.0
+                    entry["sell_value"] = sell_val or 0.0
+                    entry["net_value"] = (buy_val or 0.0) - (sell_val or 0.0)
+                if price_col:
+                    entry["price"] = _safe_float(row.get(price_col))
+                if acc_vol_col:
+                    acc = _safe_int(row.get(acc_vol_col))
+                    entry["total_volume"] = acc
+                    # Tỷ trọng khối ngoại trong tổng khớp — cho biết mức chi phối.
+                    if acc and acc > 0:
+                        entry["foreign_share_pct"] = round((buy_vol + sell_vol) / acc * 100.0, 2)
+                if room_col and total_room_col:
+                    entry["current_room"] = _safe_int(row.get(room_col))
+                    entry["total_room"] = _safe_int(row.get(total_room_col))
+                out[sym] = entry
+
+            if out:
+                return out
+        except Exception as e:
+            print(f"[foreign] price_board({source}) failed: {str(e)[:150]}")
+            continue
+
+    return {}
 
 
 def _fetch_foreign_via_cafef_rss(symbol: str) -> Optional[Dict[str, Any]]:
@@ -260,10 +371,29 @@ def fetch_foreign_trade_for_symbol(symbol: str) -> Dict[str, Any]:
     if cached is not None:
         return {**cached, "cached": True}
 
-    # 1) vnstock
+    # 1) price_board — số liệu định lượng của phiên hiện tại.
+    board = _fetch_foreign_via_price_board([symbol]).get(symbol)
+
+    # 2) Quote.history — chuỗi 5 phiên (chỉ vài source có cột foreign).
     data = _fetch_foreign_via_vnstock(symbol)
 
-    # 2) Fallback RSS định tính
+    if board is not None:
+        if data is None:
+            data = {
+                "symbol": symbol,
+                "available": True,
+                "source": "vnstock/price_board",
+                "today": board,
+                "recent_sessions": [board],
+                "net_5d": board.get("net_volume", 0),
+            }
+        else:
+            # Có cả hai: lấy phiên hôm nay từ price_board (tươi hơn, có giá trị VND),
+            # giữ chuỗi lịch sử từ history.
+            data["today"] = board
+            data["source"] = f"{data.get('source', 'vnstock')}+price_board"
+
+    # 3) Fallback RSS định tính
     if data is None:
         data = _fetch_foreign_via_cafef_rss(symbol)
 
@@ -273,8 +403,8 @@ def fetch_foreign_trade_for_symbol(symbol: str) -> Dict[str, Any]:
             "symbol": symbol,
             "available": False,
             "reason": (
-                "vnstock 4.0.4 không expose dữ liệu khối ngoại cho mã này và "
-                "RSS CafeF/Vietstock cũng không có tin nhắc tới mã."
+                "Không lấy được dữ liệu khối ngoại cho mã này "
+                "(price_board và RSS CafeF/Vietstock đều không có số liệu)."
             ),
             "cached": False,
         }
@@ -341,6 +471,55 @@ def _parse_top_from_cafef_rss(direction: str) -> List[Dict[str, Any]]:
     return items
 
 
+def _foreign_universe() -> List[str]:
+    """Rổ mã để xếp hạng khối ngoại. VN100 nếu lấy được, không thì VN30."""
+    try:
+        from sector_service import get_vn100_symbols
+
+        symbols = get_vn100_symbols()
+        if symbols:
+            return symbols
+    except Exception as e:
+        print(f"[foreign] không lấy được VN100: {str(e)[:120]}")
+    from market_universe import VN30_SYMBOLS
+
+    return list(VN30_SYMBOLS)
+
+
+def _rank_foreign_from_board(top: int) -> Optional[Dict[str, Any]]:
+    """
+    Xếp hạng mua/bán ròng theo GIÁ TRỊ (VND) nếu có, không thì theo khối lượng.
+    Trả None khi price_board không dùng được -> caller rơi về RSS.
+    """
+    universe = _foreign_universe()
+    board = _fetch_foreign_via_price_board(universe)
+    if not board:
+        return None
+
+    rows = [r for r in board.values() if r.get("net_volume") or r.get("net_value")]
+    if not rows:
+        return None
+
+    has_value = any("net_value" in r for r in rows)
+    key = (lambda r: r.get("net_value", 0.0)) if has_value else (lambda r: r.get("net_volume", 0))
+
+    ascending = sorted(rows, key=key)
+    net_sell = [r for r in ascending if key(r) < 0][:top]
+    net_buy = [r for r in reversed(ascending) if key(r) > 0][:top]
+
+    return {
+        "available": True,
+        "source": "vnstock/price_board",
+        "qualitative_only": False,
+        "ranked_by": "value" if has_value else "volume",
+        "universe_size": len(universe),
+        "fetched_at": now_vn().isoformat(),
+        "top_net_buy": net_buy,
+        "top_net_sell": net_sell,
+        "cached": False,
+    }
+
+
 def fetch_top_foreign_today(top: int = 10) -> Dict[str, Any]:
     """
     Top mua ròng + top bán ròng của thị trường hôm nay.
@@ -353,6 +532,13 @@ def fetch_top_foreign_today(top: int = 10) -> Dict[str, Any]:
     cached = _cache.get(cache_key)
     if cached is not None:
         return {**cached, "cached": True}
+
+    # price_board nhận cả rổ trong 1 request -> xếp hạng định lượng thật sự,
+    # thay vì đoán từ tiêu đề tin RSS.
+    ranked = _rank_foreign_from_board(top)
+    if ranked is not None:
+        _cache.set(cache_key, ranked, TOP_FOREIGN_TTL_SECONDS)
+        return ranked
 
     buys = _parse_top_from_cafef_rss("BUY")
     sells = _parse_top_from_cafef_rss("SELL")

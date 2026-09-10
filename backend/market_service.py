@@ -94,6 +94,7 @@ _cache = TTLCache()
 # ---------- Realtime price ----------
 
 REALTIME_TTL_SECONDS = 5.0
+LAST_CLOSE_TTL_SECONDS = 300.0  # giá đóng cửa không đổi trong phiên nghỉ -> cache lâu hơn
 FUNDAMENTALS_TTL_SECONDS = 3600.0  # 1 giờ
 
 
@@ -113,7 +114,7 @@ def fetch_realtime_price(symbol: str) -> Dict[str, Any]:
         return {"price": None, "error": "vnstock không khả dụng", "cached": False}
 
     last_error = None
-    for source in ("VCI", "TCBS", "KBS"):
+    for source in ("VCI", "KBS"):
         try:
             q = Quote(symbol=symbol, source=source)
             df = q.intraday(page_size=1)
@@ -130,6 +131,7 @@ def fetch_realtime_price(symbol: str) -> Dict[str, Any]:
                 "volume": int(row.get("volume", 0) or 0),
                 "match_type": str(row.get("match_type", "")).lower() or None,
                 "source": source,
+                "is_intraday": True,
                 "cached": False,
             }
             _cache.set(cache_key, payload, REALTIME_TTL_SECONDS)
@@ -138,7 +140,42 @@ def fetch_realtime_price(symbol: str) -> Dict[str, Any]:
             last_error = str(e)
             continue
 
+    # Ngoài giờ khớp lệnh (và với mã ít thanh khoản) intraday thường rỗng.
+    # Rơi về giá đóng cửa phiên gần nhất để UI vẫn có số hiển thị.
+    fallback = _fetch_last_close(symbol)
+    if fallback is not None:
+        _cache.set(cache_key, fallback, LAST_CLOSE_TTL_SECONDS)
+        return fallback
+
     return {"symbol": symbol, "price": None, "error": last_error or "Không có dữ liệu", "cached": False}
+
+
+def _fetch_last_close(symbol: str) -> Optional[Dict[str, Any]]:
+    """Giá đóng cửa phiên gần nhất từ dữ liệu ngày. is_intraday=False để UI ghi rõ."""
+    start = (now_vn() - timedelta(days=14)).strftime("%Y-%m-%d")
+    end = now_vn().strftime("%Y-%m-%d")
+    for source in ("VCI", "KBS"):
+        try:
+            df = Quote(symbol=symbol, source=source).history(start=start, end=end, interval="1D")
+            if df is None or df.empty:
+                continue
+            row = df.iloc[-1]
+            close_raw = _safe_float(row.get("close"))
+            if close_raw is None:
+                continue
+            return {
+                "symbol": symbol,
+                "price": close_raw * 1000.0 if close_raw < 1000 else close_raw,
+                "time": str(row.get("time", "")),
+                "volume": int(row.get("volume", 0) or 0),
+                "match_type": None,
+                "source": f"{source}/daily-close",
+                "is_intraday": False,
+                "cached": False,
+            }
+        except Exception:
+            continue
+    return None
 
 
 # ---------- Fundamentals ----------
@@ -155,51 +192,168 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
+# Đơn vị hiển thị chuẩn của payload fundamentals:
+#   pe, pb, debt_to_equity, beta  -> lần (ratio)
+#   roe, roa, *_margin, *_growth, dividend_yield -> phần trăm (đã nhân 100)
+#   eps, bvps -> VND/cổ phiếu
+#
+# Mỗi source trả đơn vị khác nhau nên map kèm hệ số quy đổi:
+#   ("item_id ứng viên", hệ_số)
+# KBS đã trả sẵn %; VCI trả proportion (0.187 = 18.7%).
+_RATIO_MAPS: Dict[str, Dict[str, Tuple[Tuple[str, ...], float]]] = {
+    "KBS": {
+        "pe": (("pe_ratio",), 1.0),
+        "pb": (("pb_ratio",), 1.0),
+        "roe": (("roe_trailling", "roe"), 1.0),
+        "roa": (("roa_trailling", "roa"), 1.0),
+        "eps": (("trailing_eps",), 1.0),
+        "bvps": (("book_value_per_share_bvps",), 1.0),
+        "beta": (("beta",), 1.0),
+        "revenue_growth": (("net_revenue",), 1.0),
+        "earnings_growth": (
+            ("profit_after_tax_for_shareholders_of_the_parent_company", "profit_before_tax"),
+            1.0,
+        ),
+        # KBS "Nợ vay trên Vốn chủ sở hữu" trả %, quy về lần cho khớp quy ước P/E.
+        "debt_to_equity": (("debt_to_equity",), 0.01),
+        "dividend_yield": (("dividend_yield",), 100.0),
+        "net_margin": (("net_margin",), 1.0),
+        "gross_margin": (("gross_margin",), 1.0),
+    },
+    "VCI": {
+        "pe": (("pe_ratio",), 1.0),
+        "pb": (("pb_ratio",), 1.0),
+        "roe": (("roe",), 100.0),
+        "roa": (("roa",), 100.0),
+        "eps": ((), 1.0),  # VCI ratio() không expose EPS
+        "bvps": ((), 1.0),
+        "beta": ((), 1.0),
+        "revenue_growth": ((), 1.0),
+        "earnings_growth": ((), 1.0),
+        "debt_to_equity": (("debt_to_equity", "debtPerEquity"), 1.0),
+        "dividend_yield": (("dividend_yield",), 100.0),
+        "net_margin": (("net_margin",), 100.0),
+        "gross_margin": (("gross_margin",), 100.0),
+    },
+}
+
+# Thứ tự thử source. KBS trả kỳ gần nhất (vd 2026-Q2); VCI ở vnstock free tier
+# hiện đứng ở 2018 nên chỉ dùng làm phương án dự phòng.
+_FUNDAMENTALS_SOURCES = ("KBS", "VCI")
+
+
+def _parse_period(label: Optional[str]) -> Optional[Tuple[int, int]]:
+    """
+    'YYYY-Qn' -> (YYYY, n); 'YYYY' -> (YYYY, 4). Trả None nếu không parse được.
+    Hậu tố lạ do trùng tên cột ('2025-Q4_1') được bỏ qua.
+    """
+    if not label:
+        return None
+    s = str(label).strip()
+    if len(s) < 4 or not s[:4].isdigit():
+        return None
+    year = int(s[:4])
+    quarter = 4
+    marker = s.find("Q", 4)
+    if marker != -1 and marker + 1 < len(s) and s[marker + 1].isdigit():
+        quarter = int(s[marker + 1])
+    return (year, quarter)
+
+
 def _latest_period_column(columns) -> Optional[str]:
     """
     Tìm cột giai đoạn mới nhất trong dataframe ratio của vnstock.
     Columns format: 'YYYY-Qn' (vd '2026-Q1') hoặc 'YYYY'.
     """
-    period_cols = []
-    for c in columns:
-        s = str(c)
-        # Match 'YYYY-Q1..4' hoặc 'YYYY'
-        if len(s) >= 4 and s[:4].isdigit():
-            period_cols.append(s)
-    if not period_cols:
+    dated = [(_parse_period(c), str(c)) for c in columns]
+    dated = [(key, name) for key, name in dated if key is not None]
+    if not dated:
         return None
-    # Sort lexicographically — 'YYYY-Qn' và 'YYYY' đều sort đúng theo thời gian
-    period_cols.sort(reverse=True)
-    return period_cols[0]
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+    return dated[0][1]
 
 
 def _row_value(df, item_id_candidates, latest_col):
     """
     Tìm hàng có item_id khớp 1 trong candidates, trả về giá trị cột latest_col.
-    vnstock dùng item_id thường viết camelCase hoặc snake_case khác nhau giữa
-    các source và version.
+
+    Cột trong df có thể trùng tên (vnstock lặp label giữa các kỳ) nên chọn theo
+    vị trí cột đầu tiên khớp, tránh việc df[col] trả về DataFrame thay vì Series.
     """
-    if "item_id" not in df.columns or latest_col is None:
+    if "item_id" not in df.columns or latest_col is None or not item_id_candidates:
         return None
+    try:
+        col_pos = list(df.columns).index(latest_col)
+    except ValueError:
+        return None
+
     item_ids = df["item_id"].astype(str).str.lower()
     for cand in item_id_candidates:
         mask = item_ids == cand.lower()
         if mask.any():
-            return _safe_float(df.loc[mask, latest_col].iloc[0])
-    # Fallback: substring contains
+            return _safe_float(df.iloc[mask.values.argmax(), col_pos])
+    # Fallback: substring contains — chỉ với candidate đủ dài để không khớp nhầm.
     for cand in item_id_candidates:
-        mask = item_ids.str.contains(cand.lower(), na=False)
+        if len(cand) < 4:
+            continue
+        mask = item_ids.str.contains(cand.lower(), na=False, regex=False)
         if mask.any():
-            return _safe_float(df.loc[mask, latest_col].iloc[0])
+            return _safe_float(df.iloc[mask.values.argmax(), col_pos])
     return None
+
+
+def _fetch_fundamentals_from_source(symbol: str, source: str) -> Optional[Dict[str, Any]]:
+    """
+    Đọc ratio() của 1 source và quy đổi về schema chuẩn. None nếu source không dùng được.
+    """
+    field_map = _RATIO_MAPS.get(source)
+    if field_map is None:
+        return None
+
+    fin = Finance(symbol=symbol, source=source)
+    ratios = None
+    for kwargs in ({"period": "quarter"}, {"period": "year"}, {}):
+        try:
+            ratios = fin.ratio(**kwargs) if hasattr(fin, "ratio") else None
+            if ratios is not None and not ratios.empty:
+                break
+        except Exception:
+            continue
+
+    if ratios is None or ratios.empty:
+        return None
+
+    latest_col = _latest_period_column(ratios.columns)
+    if latest_col is None:
+        return None
+
+    built: Dict[str, Any] = {}
+    for field, (candidates, scale) in field_map.items():
+        raw = _row_value(ratios, candidates, latest_col)
+        built[field] = raw * scale if raw is not None else None
+
+    if all(v is None for v in built.values()):
+        return None
+
+    period = _parse_period(latest_col)
+    return {
+        "symbol": symbol,
+        "available": True,
+        "source": source,
+        "period": str(latest_col).split("_")[0],
+        "period_key": period,
+        **built,
+    }
 
 
 def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
     """
     Lấy chỉ số tài chính cơ bản (P/E, P/B, ROE, EPS, tăng trưởng) qua vnstock.
 
-    Schema vnstock VCI Finance.ratio(): hàng = chỉ số, cột = quý ('YYYY-Q1').
-    Cache 1 giờ. Defensive với 2 source (VCI / TCBS) và 3 period (quarter/year/no-arg).
+    Schema vnstock Finance.ratio(): hàng = chỉ số (cột 'item_id'), cột = kỳ ('YYYY-Qn').
+    Thử lần lượt các source, trả về kết quả có kỳ MỚI NHẤT — quan trọng vì VCI
+    trên free tier vẫn đang trả số liệu 2018, dùng nhầm sẽ hiển thị P/E cũ 8 năm.
+    Cache 1 giờ.
     """
     symbol = symbol.strip().upper()
     cache_key = f"fundamentals:{symbol}"
@@ -211,105 +365,69 @@ def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
     if not HAS_VNSTOCK:
         return {"symbol": symbol, "available": False, "reason": "vnstock không khả dụng"}
 
-    payload: Dict[str, Any] = {"symbol": symbol, "available": False}
+    best: Optional[Dict[str, Any]] = None
     last_error = None
+    current_year = now_vn().year
 
-    for source in ("VCI", "TCBS"):
+    for source in _FUNDAMENTALS_SOURCES:
         try:
-            fin = Finance(symbol=symbol, source=source)
-            ratios = None
-            for kwargs in ({"period": "quarter"}, {"period": "year"}, {}):
-                try:
-                    ratios = fin.ratio(**kwargs) if hasattr(fin, "ratio") else None
-                    if ratios is not None and not ratios.empty:
-                        break
-                except Exception:
-                    continue
-
-            if ratios is None or ratios.empty:
-                continue
-
-            latest_col = _latest_period_column(ratios.columns)
-            if latest_col is None:
-                last_error = f"Không tìm thấy cột giai đoạn trong {list(ratios.columns)[:5]}"
-                continue
-
-            # item_id candidates dựa trên vnstock VCI thực tế. Đặt strict trước (exact match),
-            # fallback substring trong _row_value.
-            # item_id thực tế trong vnstock 4.x VCI: pe_ratio, pb_ratio, roe, roa,
-            # debt_to_equity, dividend_yield, gross_margin, net_margin, ...
-            # KBS có thể khác — substring fallback trong _row_value.
-            raw = {
-                "pe": _row_value(ratios, ["pe_ratio", "pe"], latest_col),
-                "pb": _row_value(ratios, ["pb_ratio", "pb"], latest_col),
-                "roe": _row_value(ratios, ["roe"], latest_col),
-                "roa": _row_value(ratios, ["roa"], latest_col),
-                "eps": _row_value(ratios, ["eps", "basic_eps"], latest_col),
-                "revenue_growth": _row_value(ratios, ["revenue_yoy", "revenue_growth"], latest_col),
-                "earnings_growth": _row_value(ratios, ["profit_yoy", "earnings_growth", "post_tax_profit_growth", "net_profit_yoy"], latest_col),
-                "debt_to_equity": _row_value(ratios, ["debt_to_equity", "debtperequity", "de"], latest_col),
-                "dividend_yield": _row_value(ratios, ["dividend_yield"], latest_col),
-                "net_margin": _row_value(ratios, ["net_margin"], latest_col),
-                "gross_margin": _row_value(ratios, ["gross_margin"], latest_col),
-            }
-
-            # vnstock trả tỷ lệ dạng proportion (0.187 = 18.7%). Quy đổi sang %
-            # để UI và prompt AI dùng đơn vị nhất quán. P/E và P/B vẫn giữ nguyên.
-            def _pct(v):
-                return v * 100 if isinstance(v, (int, float)) else None
-
-            built = {
-                **raw,
-                "roe": _pct(raw["roe"]),
-                "roa": _pct(raw["roa"]),
-                "revenue_growth": _pct(raw["revenue_growth"]),
-                "earnings_growth": _pct(raw["earnings_growth"]),
-                "dividend_yield": _pct(raw["dividend_yield"]),
-                "net_margin": _pct(raw["net_margin"]),
-                "gross_margin": _pct(raw["gross_margin"]),
-            }
-
-            if all(v is None for v in built.values()):
-                # Schema khác hoàn toàn — thử source khác
-                last_error = f"Không pick được chỉ số nào từ source={source}, latest_col={latest_col}"
-                continue
-
-            payload = {
-                "symbol": symbol,
-                "available": True,
-                "source": source,
-                "period": latest_col,
-                **built,
-                "cached": False,
-            }
-            _cache.set(cache_key, payload, FUNDAMENTALS_TTL_SECONDS)
-            return payload
+            result = _fetch_fundamentals_from_source(symbol, source)
         except Exception as e:
             last_error = str(e)
             continue
+        if result is None:
+            continue
+        if best is None or (result.get("period_key") or (0, 0)) > (best.get("period_key") or (0, 0)):
+            best = result
+        # Kỳ gần đây thì dừng luôn, khỏi tốn thêm request (vnstock free tier 20 req/phút).
+        year = (result.get("period_key") or (0, 0))[0]
+        if year >= current_year - 1:
+            break
 
-    payload["reason"] = last_error or "Không lấy được dữ liệu cơ bản"
-    return payload
+    if best is None:
+        return {
+            "symbol": symbol,
+            "available": False,
+            "reason": last_error or "Không lấy được dữ liệu cơ bản",
+        }
+
+    year = (best.pop("period_key", None) or (0, 0))[0]
+    if year and year < current_year - 1:
+        best["stale"] = True
+        best["stale_note"] = f"Nguồn {best['source']} chỉ có số liệu đến {best['period']}."
+    best["cached"] = False
+    _cache.set(cache_key, best, FUNDAMENTALS_TTL_SECONDS)
+    return best
 
 
 def format_fundamentals_for_prompt(f: Dict[str, Any]) -> str:
     if not f.get("available"):
         return f"Dữ liệu cơ bản: Không khả dụng ({f.get('reason', '')})."
 
-    def fmt(v, suffix=""):
+    def fmt(v, suffix="", prec=2):
         if v is None:
             return "N/A"
-        return f"{v:.2f}{suffix}"
+        return f"{v:,.{prec}f}{suffix}"
 
-    return (
-        "Chỉ số cơ bản (gần nhất):\n"
-        f"- P/E: {fmt(f.get('pe'))}\n"
-        f"- P/B: {fmt(f.get('pb'))}\n"
-        f"- ROE: {fmt(f.get('roe'), '%') }\n"
-        f"- ROA: {fmt(f.get('roa'), '%') }\n"
-        f"- EPS: {fmt(f.get('eps'))}\n"
-        f"- Tăng trưởng doanh thu: {fmt(f.get('revenue_growth'), '%')}\n"
-        f"- Tăng trưởng LNST: {fmt(f.get('earnings_growth'), '%')}\n"
-        f"- Nợ/Vốn chủ: {fmt(f.get('debt_to_equity'))}\n"
-        f"- Cổ tức (yield): {fmt(f.get('dividend_yield'), '%')}\n"
-    )
+    lines = [
+        f"Chỉ số cơ bản (kỳ {f.get('period', 'gần nhất')}, nguồn {f.get('source', '?')}):",
+        f"- P/E: {fmt(f.get('pe'))}",
+        f"- P/B: {fmt(f.get('pb'))}",
+        f"- ROE: {fmt(f.get('roe'), '%')}",
+        f"- ROA: {fmt(f.get('roa'), '%')}",
+        f"- EPS (4 quý gần nhất): {fmt(f.get('eps'), ' VND', 0)}",
+        f"- Giá trị sổ sách/cp: {fmt(f.get('bvps'), ' VND', 0)}",
+        f"- Biên lợi nhuận gộp: {fmt(f.get('gross_margin'), '%')}",
+        f"- Biên lợi nhuận ròng: {fmt(f.get('net_margin'), '%')}",
+        f"- Tăng trưởng doanh thu: {fmt(f.get('revenue_growth'), '%')}",
+        f"- Tăng trưởng LNST: {fmt(f.get('earnings_growth'), '%')}",
+        f"- Nợ vay/Vốn chủ: {fmt(f.get('debt_to_equity'))}",
+        f"- Cổ tức (yield): {fmt(f.get('dividend_yield'), '%')}",
+        f"- Beta: {fmt(f.get('beta'))}",
+    ]
+    if f.get("stale"):
+        lines.append(
+            f"- LƯU Ý: {f.get('stale_note', 'Số liệu cơ bản đã cũ')} — "
+            "không dùng các chỉ số này để kết luận định giá hiện tại."
+        )
+    return "\n".join(lines) + "\n"

@@ -1,11 +1,16 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Globe2, Grid3x3, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
 
+// Backend trả giá trị khối ngoại bằng VND nguyên (vd 21_131_669_200), phải quy
+// về tỷ trước khi gắn hậu tố "tỷ" — nếu không sẽ hiện "21131669200.0 tỷ".
 const fmtBillion = (v) => {
-  if (v === null || v === undefined || Number.isNaN(v)) return 'N/A';
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return 'N/A';
   const num = Number(v);
-  const sign = num >= 0 ? '+' : '';
-  return `${sign}${num.toFixed(1)} tỷ`;
+  const sign = num > 0 ? '+' : num < 0 ? '-' : '';
+  const abs = Math.abs(num);
+  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)} tỷ`;
+  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)} tr`;
+  return `${sign}${abs.toLocaleString()} đ`;
 };
 
 const fmtPct = (v) => {
@@ -40,19 +45,41 @@ const heatmapTone = (pct) => {
   return 'flat';
 };
 
+const fmtShares = (v) => {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return 'N/A';
+  const num = Number(v);
+  const sign = num > 0 ? '+' : num < 0 ? '-' : '';
+  const abs = Math.abs(num);
+  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M CP`;
+  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(0)}K CP`;
+  return `${sign}${abs.toLocaleString()} CP`;
+};
+
 const ForeignRow = ({ item, side }) => {
-  const value = item?.net_value ?? item?.value ?? item?.net ?? 0;
+  // price_board không phải lúc nào cũng trả cột giá trị; khi thiếu, backend xếp
+  // hạng theo khối lượng. Hiện đúng thứ đang có — trước đây rơi về 0 nên bảng
+  // toàn "0 đ" dù khối ngoại mua ròng hàng triệu cổ phiếu.
+  const value = item?.net_value ?? item?.value ?? item?.net ?? null;
+  const volume = item?.net_volume ?? null;
   const symbol = item?.symbol || item?.ticker || '---';
   const name = item?.name || item?.company_name || null;
   const isBuy = side === 'buy';
+  const hasValue = value !== null && value !== undefined && Number(value) !== 0;
   return (
     <div className="mp-foreign-row">
       <div className="mp-foreign-left">
         <span className="mp-foreign-symbol">{symbol}</span>
         {name ? <span className="mp-foreign-name">{name}</span> : null}
       </div>
-      <span className={`mp-foreign-badge ${isBuy ? 'buy' : 'sell'}`}>
-        {fmtBillion(value)}
+      <span
+        className={`mp-foreign-badge ${isBuy ? 'buy' : 'sell'}`}
+        title={
+          hasValue && volume !== null
+            ? `${fmtShares(volume)} · ${fmtBillion(value)}`
+            : undefined
+        }
+      >
+        {hasValue ? fmtBillion(value) : fmtShares(volume)}
       </span>
     </div>
   );
@@ -60,15 +87,20 @@ const ForeignRow = ({ item, side }) => {
 
 const SectorBox = ({ item }) => {
   const name = item?.name || item?.sector || item?.industry || '---';
-  const pct = item?.change_pct ?? item?.pct ?? item?.change ?? null;
-  const count = item?.symbol_count ?? item?.count ?? item?.num_symbols ?? null;
+  // Backend trả `avg_change_pct`; các tên còn lại là dự phòng cho schema cũ.
+  const pct = item?.avg_change_pct ?? item?.change_pct ?? item?.pct ?? item?.change ?? null;
+  // Trung bình chỉ tính trên vài mã đại diện (rổ VN100), không phải cả ngành —
+  // hiện luôn tên mã để con số không bị đọc nhầm thành chỉ số ngành.
+  const used = Array.isArray(item?.symbols_used) ? item.symbols_used : [];
   const tone = heatmapTone(pct);
   return (
     <div className={`mp-sector-box mp-tone-${tone}`}>
       <div className="mp-sector-name">{name}</div>
       <div className="mp-sector-pct">{fmtPct(pct)}</div>
-      {count !== null && count !== undefined ? (
-        <div className="mp-sector-count">{count} mã</div>
+      {used.length ? (
+        <div className="mp-sector-count" title={`Trung bình của ${used.join(', ')}`}>
+          {used.join(' · ')}
+        </div>
       ) : null}
     </div>
   );
@@ -126,8 +158,9 @@ export default function MarketPanel({ apiBase }) {
     refreshAll();
   }, [refreshAll]);
 
-  const topBuy = foreign?.top_buy || foreign?.buy || foreign?.net_buy || [];
-  const topSell = foreign?.top_sell || foreign?.sell || foreign?.net_sell || [];
+  // Backend trả `top_net_buy` / `top_net_sell`; các tên còn lại là dự phòng.
+  const topBuy = foreign?.top_net_buy || foreign?.top_buy || foreign?.buy || [];
+  const topSell = foreign?.top_net_sell || foreign?.top_sell || foreign?.sell || [];
   const sectorList = Array.isArray(sectors)
     ? sectors
     : sectors?.sectors || sectors?.heatmap || sectors?.items || [];
@@ -137,7 +170,7 @@ export default function MarketPanel({ apiBase }) {
   const isRefreshing = foreignLoading || sectorsLoading;
 
   return (
-    <div className="glass-panel">
+    <div className="glass-panel mp-panel">
       <div className="panel-header">
         <div className="panel-title">
           <Globe2 size={16} className="text-accent" />
@@ -269,13 +302,17 @@ export default function MarketPanel({ apiBase }) {
           to { transform: rotate(360deg); }
         }
 
+        /* Panel này ở trong rail 320px trên desktop nhưng full-width trên mobile.
+           Chia cột theo viewport (như trước) khiến rail 320px bị xẻ đôi thành hai
+           cột 140px — không đủ chỗ cho cả mã lẫn giá trị. Dùng container query. */
+        .mp-panel { container-type: inline-size; }
         .mp-grid {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: 1fr;
           gap: 14px;
         }
-        @media (max-width: 900px) {
-          .mp-grid { grid-template-columns: 1fr; }
+        @container (min-width: 640px) {
+          .mp-grid { grid-template-columns: 1fr 1fr; }
         }
 
         .mp-section {
@@ -320,13 +357,17 @@ export default function MarketPanel({ apiBase }) {
         }
 
         /* Khối ngoại */
+        /* Panel này nằm trong rail hẹp (~230px) ở desktop nhưng chiếm nguyên
+           chiều rộng trên mobile — quyết định số cột theo bề rộng CONTAINER chứ
+           không theo viewport, nếu không mã CK bị bóp còn 14px và cụt chữ. */
+        .mp-section { container-type: inline-size; }
         .mp-foreign-cols {
           display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
+          grid-template-columns: 1fr;
+          gap: 10px;
         }
-        @media (max-width: 480px) {
-          .mp-foreign-cols { grid-template-columns: 1fr; }
+        @container (min-width: 420px) {
+          .mp-foreign-cols { grid-template-columns: 1fr 1fr; gap: 8px; }
         }
         .mp-foreign-col {
           display: flex;
@@ -356,7 +397,8 @@ export default function MarketPanel({ apiBase }) {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 8px;
+          gap: 6px;
+          min-width: 0;
           padding: 6px 8px;
           background: rgba(0, 0, 0, 0.25);
           border: 1px solid var(--border-color);
@@ -375,6 +417,8 @@ export default function MarketPanel({ apiBase }) {
           font-size: 12px;
           color: var(--text-primary);
           letter-spacing: 0.4px;
+          flex: 0 0 auto;
+          white-space: nowrap;
         }
         .mp-foreign-name {
           font-size: 10px;

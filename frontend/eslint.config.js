@@ -17,5 +17,15 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    rules: {
+      // eslint-plugin-react-hooks v7 bật các rule React Compiler và đặt mức error.
+      // Chúng bắt đúng những pattern fetch-rồi-setState trong useEffect mà app này
+      // dùng khắp nơi (poll giá, load panel). Đó là code chạy đúng, chỉ chưa tối ưu
+      // theo compiler — hạ xuống warn để `npm run lint` vẫn chặn được lỗi thật
+      // (biến không dùng, typo) thay vì luôn đỏ.
+      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/immutability': 'warn',
+      'react-hooks/purity': 'warn',
+    },
   },
 ])

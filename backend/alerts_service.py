@@ -2,9 +2,11 @@
 Alert engine — người dùng định nghĩa rule cảnh báo, engine đánh giá khi được gọi.
 
 Triết lý lưu trữ:
-- Dùng dict in-memory + persist vào file JSON ở backend/alerts.json.
+- Lưu trong DB dùng chung với portfolio (SQLite khi dev, Postgres khi deploy).
 - Lý do: alerts là dữ liệu nhỏ (vài chục → vài trăm rule cho 1 user), không cần SQL.
-- Migrate sang DB sau này: chỉ cần thay 2 hàm _load_state / _save_state.
+- KHÔNG quay lại file JSON: production chạy 2 gunicorn worker (mỗi worker một bản
+  state riêng, ghi đè lẫn nhau) và filesystem Railway/Render là ephemeral nên
+  redeploy sẽ xoá sạch alert người dùng đã đặt.
 
 Các loại điều kiện hỗ trợ:
 - price_above / price_below  : so giá realtime với threshold (VND)
@@ -12,6 +14,8 @@ Các loại điều kiện hỗ trợ:
 - ema_cross_up               : EMA20 vừa cắt LÊN EMA50 (phiên gần nhất so với phiên trước)
 - ema_cross_down             : EMA20 vừa cắt XUỐNG EMA50
 - ai_signal_change           : khuyến nghị AI thay đổi so với lần check trước
+                                (threshold không dùng — đặt 0)
+- news_new                   : có tin mới về doanh nghiệp kể từ lúc đặt cảnh báo
                                 (threshold không dùng — đặt 0)
 
 Workflow:
@@ -24,12 +28,13 @@ Tất cả comment + reason đều tiếng Việt.
 """
 from __future__ import annotations
 
-import json
-import os
-import threading
+import storage_service as storage
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+VN_TZ = timezone(timedelta(hours=7))
 
 # Import phòng thủ: alerts engine phụ thuộc stock_service để lấy chỉ báo,
 # market_service để lấy giá realtime, ai_service để check signal change.
@@ -55,12 +60,14 @@ try:
 except Exception:
     HAS_STOCK = False
 
+try:
+    from news_service import get_recent_news
+    HAS_NEWS = True
+except Exception:
+    HAS_NEWS = False
+
 
 # ---------- Hằng số ----------
-
-# File JSON persist state. Đặt cạnh module để portable trên cả Windows/Linux.
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ALERTS_FILE = os.path.join(_BASE_DIR, "alerts.json")
 
 # Cache giá + chỉ báo trong 1 lần check_alerts để mỗi symbol fetch 1 lần.
 # TTL ngắn (10s) vì check_alerts thường chạy theo poll interval >= 30s.
@@ -75,64 +82,8 @@ VALID_CONDITIONS = {
     "ema_cross_up",
     "ema_cross_down",
     "ai_signal_change",
+    "news_new",
 }
-
-
-# ---------- State management ----------
-
-# Lock toàn module — alerts ít update nên không cần lock-per-key.
-_state_lock = threading.Lock()
-
-# In-memory store:
-# {
-#   "alerts": { alert_id: rule_dict },
-#   "ai_signal_history": { symbol: last_recommendation_string }
-# }
-_state: Dict[str, Any] = {"alerts": {}, "ai_signal_history": {}}
-_state_loaded = False
-
-
-def _load_state() -> None:
-    """
-    Đọc state từ file JSON nếu có. Idempotent — gọi nhiều lần an toàn.
-    Lỗi đọc file (file rỗng, JSON sai) → reset về state mặc định, không raise.
-    """
-    global _state, _state_loaded
-    with _state_lock:
-        if _state_loaded:
-            return
-        if os.path.exists(ALERTS_FILE):
-            try:
-                with open(ALERTS_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    _state["alerts"] = data.get("alerts", {}) or {}
-                    _state["ai_signal_history"] = data.get("ai_signal_history", {}) or {}
-            except (json.JSONDecodeError, OSError) as e:
-                # File hỏng → log + dùng state mặc định, không crash service.
-                print(f"[alerts_service] Không đọc được {ALERTS_FILE}: {e}. Dùng state rỗng.")
-        _state_loaded = True
-
-
-def _save_state() -> None:
-    """
-    Ghi state ra file JSON atomically (write tmp → rename).
-    Caller chịu trách nhiệm giữ _state_lock.
-    """
-    tmp_path = ALERTS_FILE + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(_state, f, ensure_ascii=False, indent=2)
-        # os.replace atomic trên cả Windows & POSIX
-        os.replace(tmp_path, ALERTS_FILE)
-    except OSError as e:
-        print(f"[alerts_service] Không ghi được {ALERTS_FILE}: {e}")
-        # Best-effort cleanup file tạm
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except OSError:
-            pass
 
 
 # ---------- CRUD API ----------
@@ -144,8 +95,6 @@ def create_alert(symbol: str, condition: str, threshold: float) -> Dict[str, Any
     Raises:
         ValueError: nếu condition không hợp lệ hoặc symbol rỗng.
     """
-    _load_state()
-
     symbol = (symbol or "").strip().upper()
     if not symbol:
         raise ValueError("Mã cổ phiếu không được rỗng")
@@ -161,9 +110,8 @@ def create_alert(symbol: str, condition: str, threshold: float) -> Dict[str, Any
     except (TypeError, ValueError):
         raise ValueError("Threshold phải là số")
 
-    alert_id = str(uuid.uuid4())
     rule = {
-        "id": alert_id,
+        "id": str(uuid.uuid4()),
         "symbol": symbol,
         "condition": condition,
         "threshold": threshold_val,
@@ -171,12 +119,7 @@ def create_alert(symbol: str, condition: str, threshold: float) -> Dict[str, Any
         "triggered_at": None,
         "active": True,
     }
-
-    with _state_lock:
-        _state["alerts"][alert_id] = rule
-        _save_state()
-
-    return dict(rule)
+    return storage.insert_alert_rule(rule)
 
 
 def list_alerts(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -184,26 +127,12 @@ def list_alerts(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     Liệt kê alerts. Nếu truyền symbol → chỉ lọc symbol đó (case-insensitive).
     Sắp xếp theo created_at giảm dần (mới nhất lên đầu) cho UI dễ đọc.
     """
-    _load_state()
-    sym_filter = symbol.strip().upper() if symbol else None
-    with _state_lock:
-        items = list(_state["alerts"].values())
-    if sym_filter:
-        items = [a for a in items if a.get("symbol") == sym_filter]
-    items.sort(key=lambda a: a.get("created_at", 0), reverse=True)
-    # Trả copy để caller không vô tình mutate state
-    return [dict(a) for a in items]
+    return storage.list_alert_rules(symbol.strip().upper() if symbol else None)
 
 
 def delete_alert(alert_id: str) -> bool:
     """Xóa rule theo id. Trả True nếu tồn tại và xóa thành công."""
-    _load_state()
-    with _state_lock:
-        if alert_id in _state["alerts"]:
-            _state["alerts"].pop(alert_id, None)
-            _save_state()
-            return True
-    return False
+    return storage.delete_alert_rule(alert_id)
 
 
 def mark_triggered(alert_id: str) -> None:
@@ -211,14 +140,7 @@ def mark_triggered(alert_id: str) -> None:
     Đánh dấu rule đã trigger: set triggered_at + active=False (one-shot semantics).
     Idempotent — gọi trên id không tồn tại không raise.
     """
-    _load_state()
-    with _state_lock:
-        rule = _state["alerts"].get(alert_id)
-        if rule is None:
-            return
-        rule["triggered_at"] = int(time.time())
-        rule["active"] = False
-        _save_state()
+    storage.mark_alert_rule_triggered(alert_id, int(time.time()))
 
 
 # ---------- Helpers fetch dữ liệu per-symbol ----------
@@ -293,15 +215,12 @@ def _fetch_symbol_snapshot(symbol: str) -> Dict[str, Any]:
 
 def _get_last_ai_signal(symbol: str) -> Optional[str]:
     """Đọc khuyến nghị AI lần check trước. None nếu chưa từng lưu."""
-    with _state_lock:
-        return _state["ai_signal_history"].get(symbol)
+    return storage.get_ai_signals().get(symbol)
 
 
 def _set_last_ai_signal(symbol: str, recommendation: str) -> None:
     """Lưu khuyến nghị AI mới nhất để lần check sau so sánh."""
-    with _state_lock:
-        _state["ai_signal_history"][symbol] = recommendation
-        _save_state()
+    storage.set_ai_signal(symbol, recommendation)
 
 
 def _fetch_current_ai_signal(symbol: str) -> Optional[str]:
@@ -312,8 +231,8 @@ def _fetch_current_ai_signal(symbol: str) -> Optional[str]:
 
     Lưu ý: gọi AI tốn cost. Engine batch sẵn bằng cache TTL 10s ở
     _fetch_symbol_snapshot, nhưng AI call vẫn nên chạy ngoài hot-path.
-    Ở MVP này: AI signal được tracked qua _state ai_signal_history,
-    cập nhật bởi route /analyze (caller bên ngoài). Engine chỉ so sánh.
+    Ở MVP này: AI signal được lưu ở bảng ai_signal, cập nhật bởi route
+    /analyze (caller bên ngoài). Engine chỉ so sánh.
 
     Trả về None ở đây để rule ai_signal_change chỉ trigger khi
     caller chủ động update qua update_ai_signal() bên dưới.
@@ -330,7 +249,6 @@ def update_ai_signal(symbol: str, recommendation: str) -> Dict[str, Any]:
     Trả về:
         { "changed": bool, "previous": str|None, "current": str }
     """
-    _load_state()
     symbol = (symbol or "").strip().upper()
     rec = (recommendation or "").strip().upper()
     if not symbol or not rec:
@@ -339,6 +257,9 @@ def update_ai_signal(symbol: str, recommendation: str) -> Dict[str, Any]:
     previous = _get_last_ai_signal(symbol)
     changed = previous is not None and previous != rec
     _set_last_ai_signal(symbol, rec)
+    if changed:
+        # Ghi xuống DB thay vì giữ trong process: check_alerts chạy ở request khác.
+        storage.mark_ai_signal_pending(symbol)
     return {"changed": changed, "previous": previous, "current": rec}
 
 
@@ -393,6 +314,68 @@ def _eval_ai_signal_change(rule: Dict[str, Any], snap: Dict[str, Any], ctx: Dict
     return rule["symbol"] in ctx.get("ai_changed_symbols", set())
 
 
+def _parse_published_at(value: Any) -> Optional[int]:
+    """
+    Đổi published_at ISO ('2026-08-26T17:10:05') sang epoch giây.
+
+    Nguồn tin không kèm timezone. Coi như giờ Việt Nam vì đó là múi giờ của cả
+    sàn lẫn của các trang tin trong nước — diễn giải nhầm sang UTC sẽ đẩy mọi tin
+    lùi 7 tiếng và làm tin vừa ra trông như cũ.
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=VN_TZ)
+    return int(dt.timestamp())
+
+
+def _fetch_latest_news(symbol: str) -> Optional[Dict[str, Any]]:
+    """Tin mới nhất của một mã, kèm mốc thời gian đã đổi sang epoch."""
+    if not HAS_NEWS:
+        return None
+    cache_key = f"news_latest:{symbol}"
+    cached = _data_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    latest = None
+    try:
+        for item in get_recent_news(symbol, limit=5) or []:
+            ts = _parse_published_at(item.get("published_at"))
+            if ts is None:
+                continue
+            if latest is None or ts > latest["published_ts"]:
+                latest = {
+                    "published_ts": ts,
+                    "title": item.get("title") or "",
+                    "url": item.get("url"),
+                    "source": item.get("source"),
+                }
+    except Exception as e:
+        print(f"[alerts_service] Loi lay tin {symbol}: {e}")
+        return None
+
+    _data_cache.set(cache_key, latest, _SYMBOL_DATA_TTL)
+    return latest
+
+
+def _eval_news_new(rule: Dict[str, Any], snap: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
+    """
+    Trigger khi có tin phát hành SAU thời điểm đặt cảnh báo.
+
+    So với created_at chứ không phải "lần check trước": rule là one-shot, bắn xong
+    là tắt. Người dùng bật lại thì created_at mới, nên tin cũ không bắn lại.
+    """
+    latest = (ctx.get("news") or {}).get(rule["symbol"])
+    if not latest:
+        return False
+    return latest["published_ts"] > int(rule.get("created_at") or 0)
+
+
 _EVALUATORS = {
     "price_above": _eval_price_above,
     "price_below": _eval_price_below,
@@ -401,6 +384,7 @@ _EVALUATORS = {
     "ema_cross_up": _eval_ema_cross_up,
     "ema_cross_down": _eval_ema_cross_down,
     "ai_signal_change": _eval_ai_signal_change,
+    "news_new": _eval_news_new,
 }
 
 
@@ -419,18 +403,24 @@ def check_alerts(ai_changed_symbols: Optional[List[str]] = None) -> List[Dict[st
         Danh sách rule đã trigger lần này. Mỗi rule đã được mark_triggered
         (active=False, triggered_at=now) trước khi return.
     """
-    _load_state()
-
-    # Snapshot active rules (copy để release lock sớm)
-    with _state_lock:
-        active_rules = [dict(r) for r in _state["alerts"].values() if r.get("active")]
+    active_rules = [r for r in storage.list_alert_rules() if r.get("active")]
 
     if not active_rules:
         return []
 
+    # Gộp symbol caller truyền vào với symbol đã được /analyze đánh dấu từ trước.
+    pending = storage.take_ai_signal_pending()
     ctx = {
-        "ai_changed_symbols": set(s.strip().upper() for s in (ai_changed_symbols or [])),
+        "ai_changed_symbols": {
+            s.strip().upper() for s in list(ai_changed_symbols or []) + pending if s
+        },
+        "news": {},
     }
+
+    # Chỉ lấy tin cho mã thật sự có rule news_new. Lấy cho mọi mã sẽ tốn thêm một
+    # request vnstock mỗi mã mỗi lần check, trong khi hạn mức chỉ 20 request/phút.
+    for sym in {r["symbol"] for r in active_rules if r["condition"] == "news_new"}:
+        ctx["news"][sym] = _fetch_latest_news(sym)
 
     # Group theo symbol → fetch 1 lần
     symbols = sorted({r["symbol"] for r in active_rules})
@@ -467,6 +457,10 @@ def check_alerts(ai_changed_symbols: Optional[List[str]] = None) -> List[Dict[st
                     "rsi": snap.get("rsi"),
                     "ema20": snap.get("ema20"),
                     "ema50": snap.get("ema50"),
+                    # Cảnh báo tin mà không nói tin gì thì người dùng phải tự đi mò.
+                    "news": (ctx.get("news") or {}).get(rule["symbol"])
+                    if rule["condition"] == "news_new"
+                    else None,
                 },
             })
 

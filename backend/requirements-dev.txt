@@ -1,0 +1,9 @@
+# Dependencies chỉ dùng khi phát triển/test — KHÔNG cài trên production.
+# Cài: pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+
+pytest>=8.0,<10.0
+httpx>=0.27,<1.0   # bắt buộc cho fastapi.testclient
+
+# Sinh icon PWA (frontend/scripts/generate_icons.py)
+pillow>=10.0,<14.0

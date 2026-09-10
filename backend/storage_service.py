@@ -1,15 +1,16 @@
 """
-Persistence layer cho portfolio giả lập.
+Persistence layer: sổ giao dịch thật, cảnh báo, tín hiệu AI.
 
 Dual driver:
 - Có DATABASE_URL bắt đầu bằng "postgres" → dùng Neon Postgres (production)
 - Còn lại → SQLite local (dev)
 
-Cùng schema, cùng API public. Code gọi `get_portfolio()`, `record_buy()`...
-không cần biết backend nào.
+Cùng schema, cùng API public. Code gọi `list_real_transactions()`,
+`insert_alert_rule()`... không cần biết backend nào.
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -22,8 +23,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 USE_POSTGRES = DATABASE_URL.startswith("postgres")
 
 DB_PATH = Path(os.getenv("STOCK_DB_PATH", Path(__file__).parent / "data.db"))
-INITIAL_CAPITAL = 100_000_000.0
-DEFAULT_PORTFOLIO_ID = 1
 _init_lock = threading.Lock()
 _initialized = False
 
@@ -121,69 +120,89 @@ def _rollback(con):
 
 
 SCHEMA_SQLITE = """
-CREATE TABLE IF NOT EXISTS portfolio (
-    id INTEGER PRIMARY KEY,
-    cash REAL NOT NULL,
-    initial_capital REAL NOT NULL,
+CREATE TABLE IF NOT EXISTS alert (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    condition TEXT NOT NULL,
+    threshold REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    triggered_at INTEGER,
+    active INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_alert_symbol ON alert(symbol);
+CREATE TABLE IF NOT EXISTS ai_signal (
+    symbol TEXT PRIMARY KEY,
+    recommendation TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_signal_pending (
+    symbol TEXT PRIMARY KEY,
+    marked_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS real_txn (
+    id TEXT PRIMARY KEY,
+    ext_id TEXT UNIQUE,
+    trade_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    price REAL NOT NULL,
+    fee REAL NOT NULL DEFAULT 0,
+    tax REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    source TEXT,
     created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS holding (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    portfolio_id INTEGER NOT NULL REFERENCES portfolio(id) ON DELETE CASCADE,
-    symbol TEXT NOT NULL,
-    avg_price REAL NOT NULL,
-    UNIQUE(portfolio_id, symbol)
+CREATE INDEX IF NOT EXISTS idx_real_txn_symbol ON real_txn(symbol, trade_date);
+CREATE TABLE IF NOT EXISTS daily_brief (
+    brief_date TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    model TEXT,
+    generated_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS lot (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    holding_id INTEGER NOT NULL REFERENCES holding(id) ON DELETE CASCADE,
-    shares INTEGER NOT NULL,
-    buy_at_ms INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS txn (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    portfolio_id INTEGER NOT NULL REFERENCES portfolio(id) ON DELETE CASCADE,
-    ts_ms INTEGER NOT NULL,
-    symbol TEXT NOT NULL,
-    type TEXT NOT NULL,
-    shares INTEGER NOT NULL,
-    price REAL NOT NULL,
-    executor TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_txn_portfolio_ts ON txn(portfolio_id, ts_ms DESC);
 """
 
 SCHEMA_PG = """
-CREATE TABLE IF NOT EXISTS portfolio (
-    id BIGINT PRIMARY KEY,
-    cash DOUBLE PRECISION NOT NULL,
-    initial_capital DOUBLE PRECISION NOT NULL,
+CREATE TABLE IF NOT EXISTS alert (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    condition TEXT NOT NULL,
+    threshold DOUBLE PRECISION NOT NULL,
+    created_at BIGINT NOT NULL,
+    triggered_at BIGINT,
+    active BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_alert_symbol ON alert(symbol);
+CREATE TABLE IF NOT EXISTS ai_signal (
+    symbol TEXT PRIMARY KEY,
+    recommendation TEXT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_signal_pending (
+    symbol TEXT PRIMARY KEY,
+    marked_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS real_txn (
+    id TEXT PRIMARY KEY,
+    ext_id TEXT UNIQUE,
+    trade_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity BIGINT NOT NULL,
+    price DOUBLE PRECISION NOT NULL,
+    fee DOUBLE PRECISION NOT NULL DEFAULT 0,
+    tax DOUBLE PRECISION NOT NULL DEFAULT 0,
+    note TEXT,
+    source TEXT,
     created_at BIGINT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS holding (
-    id BIGSERIAL PRIMARY KEY,
-    portfolio_id BIGINT NOT NULL REFERENCES portfolio(id) ON DELETE CASCADE,
-    symbol TEXT NOT NULL,
-    avg_price DOUBLE PRECISION NOT NULL,
-    UNIQUE(portfolio_id, symbol)
+CREATE INDEX IF NOT EXISTS idx_real_txn_symbol ON real_txn(symbol, trade_date);
+CREATE TABLE IF NOT EXISTS daily_brief (
+    brief_date TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    model TEXT,
+    generated_at BIGINT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS lot (
-    id BIGSERIAL PRIMARY KEY,
-    holding_id BIGINT NOT NULL REFERENCES holding(id) ON DELETE CASCADE,
-    shares BIGINT NOT NULL,
-    buy_at_ms BIGINT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS txn (
-    id BIGSERIAL PRIMARY KEY,
-    portfolio_id BIGINT NOT NULL REFERENCES portfolio(id) ON DELETE CASCADE,
-    ts_ms BIGINT NOT NULL,
-    symbol TEXT NOT NULL,
-    type TEXT NOT NULL,
-    shares BIGINT NOT NULL,
-    price DOUBLE PRECISION NOT NULL,
-    executor TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_txn_portfolio_ts ON txn(portfolio_id, ts_ms DESC);
 """
 
 
@@ -205,12 +224,6 @@ def _init_schema_once():
             else:
                 con.executescript(SCHEMA_SQLITE)
 
-            row = _fetchone(con, "SELECT id FROM portfolio WHERE id = ?", (DEFAULT_PORTFOLIO_ID,))
-            if not row:
-                _execute(con, "INSERT INTO portfolio(id, cash, initial_capital, created_at) VALUES (?, ?, ?, ?)",
-                         (DEFAULT_PORTFOLIO_ID, INITIAL_CAPITAL, INITIAL_CAPITAL, int(time.time() * 1000)))
-                if USE_POSTGRES:
-                    con.commit()
         _initialized = True
 
 
@@ -224,155 +237,327 @@ def _row_get(row, key):
         return None
 
 
-def _holding_with_lots(con, holding_row) -> Dict[str, Any]:
-    holding_id = _row_get(holding_row, "id")
-    lots = _fetchall(con, "SELECT shares, buy_at_ms FROM lot WHERE holding_id = ? ORDER BY buy_at_ms ASC", (holding_id,))
-    total = sum(_row_get(l, "shares") for l in lots)
+# ---------- Alert rules ----------
+# Dùng chung DB với portfolio để alert sống sót qua redeploy và nhìn thấy được
+# từ mọi gunicorn worker (file JSON trước đây không đảm bảo cả hai).
+
+def _alert_row_to_dict(row) -> Dict[str, Any]:
+    """SQLite lưu active dạng 0/1, Postgres dạng boolean — chuẩn hoá về bool."""
     return {
-        "symbol": _row_get(holding_row, "symbol"),
-        "avgPrice": _row_get(holding_row, "avg_price"),
-        "shares": total,
-        "lots": [{"shares": _row_get(l, "shares"), "buyAt": _row_get(l, "buy_at_ms")} for l in lots],
+        "id": _row_get(row, "id"),
+        "symbol": _row_get(row, "symbol"),
+        "condition": _row_get(row, "condition"),
+        "threshold": _row_get(row, "threshold"),
+        "created_at": _row_get(row, "created_at"),
+        "triggered_at": _row_get(row, "triggered_at"),
+        "active": bool(_row_get(row, "active")),
     }
 
 
-def get_portfolio() -> Dict[str, Any]:
+def list_alert_rules(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Alerts mới nhất trước. `symbol` lọc theo mã (đã uppercase từ caller)."""
     _init_schema_once()
     with _conn() as con:
-        port = _fetchone(con, "SELECT id, cash, initial_capital, created_at FROM portfolio WHERE id = ?", (DEFAULT_PORTFOLIO_ID,))
-        holdings_rows = _fetchall(con, "SELECT id, symbol, avg_price FROM holding WHERE portfolio_id = ? ORDER BY symbol", (DEFAULT_PORTFOLIO_ID,))
-        return {
-            "cash": _row_get(port, "cash"),
-            "initial_capital": _row_get(port, "initial_capital"),
-            "created_at": _row_get(port, "created_at"),
-            "holdings": [_holding_with_lots(con, h) for h in holdings_rows],
-        }
+        if symbol:
+            rows = _fetchall(
+                con,
+                "SELECT id, symbol, condition, threshold, created_at, triggered_at, active "
+                "FROM alert WHERE symbol = ? ORDER BY created_at DESC",
+                (symbol,),
+            )
+        else:
+            rows = _fetchall(
+                con,
+                "SELECT id, symbol, condition, threshold, created_at, triggered_at, active "
+                "FROM alert ORDER BY created_at DESC",
+            )
+    return [_alert_row_to_dict(r) for r in rows]
 
 
-def get_transactions(limit: int = 200) -> List[Dict[str, Any]]:
+def insert_alert_rule(rule: Dict[str, Any]) -> Dict[str, Any]:
+    """Ghi rule mới. Caller đã validate symbol/condition/threshold."""
     _init_schema_once()
     with _conn() as con:
-        rows = _fetchall(con, "SELECT ts_ms, symbol, type, shares, price, executor FROM txn WHERE portfolio_id = ? ORDER BY ts_ms DESC LIMIT ?",
-                         (DEFAULT_PORTFOLIO_ID, limit))
-    return [{
-        "timestamp": _row_get(r, "ts_ms"),
-        "symbol": _row_get(r, "symbol"),
-        "type": _row_get(r, "type"),
-        "shares": _row_get(r, "shares"),
-        "price": _row_get(r, "price"),
-        "executor": _row_get(r, "executor"),
-    } for r in rows]
+        _begin(con)
+        _execute(
+            con,
+            "INSERT INTO alert(id, symbol, condition, threshold, created_at, triggered_at, active) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                rule["id"],
+                rule["symbol"],
+                rule["condition"],
+                float(rule["threshold"]),
+                int(rule["created_at"]),
+                rule.get("triggered_at"),
+                True if USE_POSTGRES else 1,
+            ),
+        )
+        _commit(con)
+    return dict(rule)
 
 
-def record_buy(symbol: str, shares: int, price: float, executor: str = "USER") -> Dict[str, Any]:
+def delete_alert_rule(alert_id: str) -> bool:
+    """True nếu có dòng bị xoá."""
     _init_schema_once()
-    cost = shares * price
-    now_ms = int(time.time() * 1000)
     with _conn() as con:
-        port = _fetchone(con, "SELECT cash FROM portfolio WHERE id = ?", (DEFAULT_PORTFOLIO_ID,))
-        if not port:
-            return {"ok": False, "error": "Portfolio không tồn tại."}
-        if cost > _row_get(port, "cash"):
-            return {"ok": False, "error": "Số dư tiền mặt không đủ."}
+        _begin(con)
+        cur = _execute(con, "DELETE FROM alert WHERE id = ?", (alert_id,))
+        deleted = (cur.rowcount or 0) > 0
+        _commit(con)
+    return deleted
 
+
+def mark_alert_rule_triggered(alert_id: str, triggered_at: int) -> None:
+    """One-shot: đánh dấu đã bắn và tắt rule. Idempotent."""
+    _init_schema_once()
+    with _conn() as con:
+        _begin(con)
+        _execute(
+            con,
+            "UPDATE alert SET triggered_at = ?, active = ? WHERE id = ?",
+            (int(triggered_at), False if USE_POSTGRES else 0, alert_id),
+        )
+        _commit(con)
+
+
+def get_ai_signals() -> Dict[str, str]:
+    """Khuyến nghị AI gần nhất theo mã — để phát hiện lúc tín hiệu đổi chiều."""
+    _init_schema_once()
+    with _conn() as con:
+        rows = _fetchall(con, "SELECT symbol, recommendation FROM ai_signal")
+    return {_row_get(r, "symbol"): _row_get(r, "recommendation") for r in rows}
+
+
+def set_ai_signal(symbol: str, recommendation: str) -> None:
+    """Upsert — cùng cú pháp cho SQLite 3.24+ và Postgres 9.5+."""
+    _init_schema_once()
+    with _conn() as con:
+        _begin(con)
+        _execute(
+            con,
+            "INSERT INTO ai_signal(symbol, recommendation, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (symbol) DO UPDATE SET recommendation = EXCLUDED.recommendation, "
+            "updated_at = EXCLUDED.updated_at",
+            (symbol, recommendation, int(time.time())),
+        )
+        _commit(con)
+
+
+def mark_ai_signal_pending(symbol: str) -> None:
+    """
+    Ghi nhận symbol vừa đổi khuyến nghị AI.
+
+    Cần bảng riêng vì /analyze và /alerts/check là hai request khác nhau (và có
+    thể ở hai worker khác nhau) — không thể truyền trạng thái qua biến in-process.
+    """
+    _init_schema_once()
+    with _conn() as con:
+        _begin(con)
+        _execute(
+            con,
+            "INSERT INTO ai_signal_pending(symbol, marked_at) VALUES (?, ?) "
+            "ON CONFLICT (symbol) DO UPDATE SET marked_at = EXCLUDED.marked_at",
+            (symbol, int(time.time())),
+        )
+        _commit(con)
+
+
+def take_ai_signal_pending() -> List[str]:
+    """Đọc và xoá danh sách symbol đang chờ xử lý (one-shot, tránh bắn lặp)."""
+    _init_schema_once()
+    with _conn() as con:
+        _begin(con)
+        rows = _fetchall(con, "SELECT symbol FROM ai_signal_pending")
+        symbols = [_row_get(r, "symbol") for r in rows]
+        if symbols:
+            _execute(con, "DELETE FROM ai_signal_pending")
+        _commit(con)
+    return symbols
+
+
+# ---------- Giao dịch thật ----------
+# Tách khỏi `txn` (portfolio giả lập) vì hai vòng đời khác nhau: giả lập reset
+# thoải mái, còn sổ giao dịch thật mất là không khôi phục được.
+
+def _real_txn_to_dict(row) -> Dict[str, Any]:
+    return {
+        "id": _row_get(row, "id"),
+        "ext_id": _row_get(row, "ext_id"),
+        "date": _row_get(row, "trade_date"),
+        "symbol": _row_get(row, "symbol"),
+        "side": _row_get(row, "side"),
+        "quantity": _row_get(row, "quantity"),
+        "price": _row_get(row, "price"),
+        "fee": _row_get(row, "fee") or 0.0,
+        "tax": _row_get(row, "tax") or 0.0,
+        "note": _row_get(row, "note") or "",
+        "source": _row_get(row, "source") or "",
+    }
+
+
+_REAL_TXN_COLUMNS = (
+    "id, ext_id, trade_date, symbol, side, quantity, price, fee, tax, note, source"
+)
+
+
+def list_real_transactions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Toàn bộ sổ giao dịch thật, cũ trước — thứ tự này cần cho khớp lệnh FIFO."""
+    _init_schema_once()
+    with _conn() as con:
+        if symbol:
+            rows = _fetchall(
+                con,
+                f"SELECT {_REAL_TXN_COLUMNS} FROM real_txn WHERE symbol = ? "
+                "ORDER BY trade_date ASC, created_at ASC",
+                (symbol,),
+            )
+        else:
+            rows = _fetchall(
+                con,
+                f"SELECT {_REAL_TXN_COLUMNS} FROM real_txn "
+                "ORDER BY trade_date ASC, created_at ASC",
+            )
+    return [_real_txn_to_dict(r) for r in rows]
+
+
+def insert_real_transactions(records: List[Dict[str, Any]]) -> Dict[str, int]:
+    """
+    Ghi nhiều giao dịch, bỏ qua bản ghi đã có `ext_id` trùng.
+
+    Trả {"inserted": n, "skipped": n} — người dùng cần biết lần nhập này thực sự
+    thêm bao nhiêu dòng, vì sao kê các tháng thường chồng lấn nhau.
+    """
+    _init_schema_once()
+    if not records:
+        return {"inserted": 0, "skipped": 0}
+
+    existing = set()
+    with _conn() as con:
+        rows = _fetchall(con, "SELECT ext_id FROM real_txn WHERE ext_id IS NOT NULL")
+        existing = {_row_get(r, "ext_id") for r in rows}
+
+        inserted = 0
+        skipped = 0
         _begin(con)
         try:
-            _execute(con, "UPDATE portfolio SET cash = cash - ? WHERE id = ?", (cost, DEFAULT_PORTFOLIO_ID))
-            holding = _fetchone(con, "SELECT id, avg_price FROM holding WHERE portfolio_id = ? AND symbol = ?",
-                                (DEFAULT_PORTFOLIO_ID, symbol))
-            if holding:
-                lots = _fetchall(con, "SELECT shares FROM lot WHERE holding_id = ?", (_row_get(holding, "id"),))
-                total_shares = sum(_row_get(l, "shares") for l in lots)
-                new_shares = total_shares + shares
-                new_avg = (total_shares * _row_get(holding, "avg_price") + cost) / new_shares
-                _execute(con, "UPDATE holding SET avg_price = ? WHERE id = ?", (round(new_avg, 2), _row_get(holding, "id")))
-                holding_id = _row_get(holding, "id")
-            else:
-                if USE_POSTGRES:
-                    cur = _execute(con, "INSERT INTO holding(portfolio_id, symbol, avg_price) VALUES (?, ?, ?) RETURNING id",
-                                   (DEFAULT_PORTFOLIO_ID, symbol, price))
-                    holding_id = cur.fetchone()["id"]
-                else:
-                    cur = _execute(con, "INSERT INTO holding(portfolio_id, symbol, avg_price) VALUES (?, ?, ?)",
-                                   (DEFAULT_PORTFOLIO_ID, symbol, price))
-                    holding_id = cur.lastrowid
-
-            _execute(con, "INSERT INTO lot(holding_id, shares, buy_at_ms) VALUES (?, ?, ?)",
-                     (holding_id, shares, now_ms))
-            _execute(con, "INSERT INTO txn(portfolio_id, ts_ms, symbol, type, shares, price, executor) VALUES (?, ?, ?, 'BUY', ?, ?, ?)",
-                     (DEFAULT_PORTFOLIO_ID, now_ms, symbol, shares, price, executor))
-            _commit(con)
-        except Exception:
-            _rollback(con)
-            raise
-    return {"ok": True, "portfolio": get_portfolio()}
-
-
-def record_sell(symbol: str, shares: int, price: float, executor: str = "USER",
-                t_plus_lock_ms: int = 2 * 24 * 3600 * 1000) -> Dict[str, Any]:
-    _init_schema_once()
-    now_ms = int(time.time() * 1000)
-    proceeds = shares * price
-
-    with _conn() as con:
-        holding = _fetchone(con, "SELECT id FROM holding WHERE portfolio_id = ? AND symbol = ?",
-                            (DEFAULT_PORTFOLIO_ID, symbol))
-        if not holding:
-            return {"ok": False, "error": "Không nắm giữ cổ phiếu này."}
-
-        holding_id = _row_get(holding, "id")
-        lots = _fetchall(con, "SELECT id, shares, buy_at_ms FROM lot WHERE holding_id = ? ORDER BY buy_at_ms ASC", (holding_id,))
-        available = sum(_row_get(l, "shares") for l in lots if (now_ms - _row_get(l, "buy_at_ms")) >= t_plus_lock_ms)
-        if available < shares:
-            locked = sum(_row_get(l, "shares") for l in lots) - available
-            return {"ok": False, "error": f"Chỉ có {available} CP khả dụng ({locked} đang khóa T+)."}
-
-        _begin(con)
-        try:
-            remaining = shares
-            for l in lots:
-                if remaining <= 0:
-                    break
-                if (now_ms - _row_get(l, "buy_at_ms")) < t_plus_lock_ms:
+            for rec in records:
+                ext_id = rec.get("ext_id")
+                if ext_id and ext_id in existing:
+                    skipped += 1
                     continue
-                lot_shares = _row_get(l, "shares")
-                if lot_shares <= remaining:
-                    _execute(con, "DELETE FROM lot WHERE id = ?", (_row_get(l, "id"),))
-                    remaining -= lot_shares
-                else:
-                    _execute(con, "UPDATE lot SET shares = shares - ? WHERE id = ?", (remaining, _row_get(l, "id")))
-                    remaining = 0
-
-            remain_row = _fetchone(con, "SELECT COALESCE(SUM(shares),0) AS s FROM lot WHERE holding_id = ?", (holding_id,))
-            if _row_get(remain_row, "s") == 0:
-                _execute(con, "DELETE FROM holding WHERE id = ?", (holding_id,))
-
-            _execute(con, "UPDATE portfolio SET cash = cash + ? WHERE id = ?", (proceeds, DEFAULT_PORTFOLIO_ID))
-            _execute(con, "INSERT INTO txn(portfolio_id, ts_ms, symbol, type, shares, price, executor) VALUES (?, ?, ?, 'SELL', ?, ?, ?)",
-                     (DEFAULT_PORTFOLIO_ID, now_ms, symbol, shares, price, executor))
+                _execute(
+                    con,
+                    "INSERT INTO real_txn(id, ext_id, trade_date, symbol, side, quantity, "
+                    "price, fee, tax, note, source, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        rec["id"],
+                        ext_id,
+                        rec["date"],
+                        rec["symbol"],
+                        rec["side"],
+                        int(rec["quantity"]),
+                        float(rec["price"]),
+                        float(rec.get("fee") or 0.0),
+                        float(rec.get("tax") or 0.0),
+                        rec.get("note") or "",
+                        rec.get("source") or "",
+                        int(time.time()),
+                    ),
+                )
+                if ext_id:
+                    existing.add(ext_id)
+                inserted += 1
             _commit(con)
         except Exception:
             _rollback(con)
             raise
 
-    return {"ok": True, "portfolio": get_portfolio()}
+    return {"inserted": inserted, "skipped": skipped}
 
 
-def reset_portfolio() -> Dict[str, Any]:
+def delete_real_transaction(txn_id: str) -> bool:
     _init_schema_once()
     with _conn() as con:
         _begin(con)
-        try:
-            if USE_POSTGRES:
-                _execute(con, "DELETE FROM lot WHERE holding_id IN (SELECT id FROM holding WHERE portfolio_id = ?)", (DEFAULT_PORTFOLIO_ID,))
-            else:
-                _execute(con, "DELETE FROM lot WHERE holding_id IN (SELECT id FROM holding WHERE portfolio_id = ?)", (DEFAULT_PORTFOLIO_ID,))
-            _execute(con, "DELETE FROM holding WHERE portfolio_id = ?", (DEFAULT_PORTFOLIO_ID,))
-            _execute(con, "DELETE FROM txn WHERE portfolio_id = ?", (DEFAULT_PORTFOLIO_ID,))
-            _execute(con, "UPDATE portfolio SET cash = ?, created_at = ? WHERE id = ?",
-                     (INITIAL_CAPITAL, int(time.time() * 1000), DEFAULT_PORTFOLIO_ID))
-            _commit(con)
-        except Exception:
-            _rollback(con)
-            raise
-    return get_portfolio()
+        cur = _execute(con, "DELETE FROM real_txn WHERE id = ?", (txn_id,))
+        deleted = (cur.rowcount or 0) > 0
+        _commit(con)
+    return deleted
+
+
+def clear_real_transactions() -> int:
+    """Xoá toàn bộ sổ giao dịch thật. Trả số dòng đã xoá để UI xác nhận lại."""
+    _init_schema_once()
+    with _conn() as con:
+        _begin(con)
+        cur = _execute(con, "DELETE FROM real_txn")
+        deleted = cur.rowcount or 0
+        _commit(con)
+    return deleted
+
+
+# ---------- Bản tin hằng ngày ----------
+# Job chạy nền (jobs/daily_brief.py) ghi vào đây; API chỉ đọc ra. Nhờ vậy app
+# web không cần gọi AI lúc phục vụ request — mở lên là có ngay.
+
+def save_daily_brief(brief_date: str, payload: Dict[str, Any]) -> None:
+    """Ghi đè bản tin của ngày. Chạy lại job trong ngày sẽ cập nhật bản mới."""
+    _init_schema_once()
+    with _conn() as con:
+        _begin(con)
+        _execute(
+            con,
+            "INSERT INTO daily_brief(brief_date, payload, model, generated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (brief_date) DO UPDATE SET payload = EXCLUDED.payload, "
+            "model = EXCLUDED.model, generated_at = EXCLUDED.generated_at",
+            (
+                brief_date,
+                json.dumps(payload, ensure_ascii=False),
+                payload.get("model", ""),
+                int(time.time()),
+            ),
+        )
+        _commit(con)
+
+
+def get_daily_brief(brief_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Bản tin của một ngày, hoặc bản mới nhất nếu không truyền ngày."""
+    _init_schema_once()
+    with _conn() as con:
+        if brief_date:
+            row = _fetchone(
+                con,
+                "SELECT brief_date, payload, model, generated_at FROM daily_brief WHERE brief_date = ?",
+                (brief_date,),
+            )
+        else:
+            row = _fetchone(
+                con,
+                "SELECT brief_date, payload, model, generated_at FROM daily_brief "
+                "ORDER BY brief_date DESC LIMIT 1",
+            )
+    if not row:
+        return None
+
+    try:
+        payload = json.loads(_row_get(row, "payload"))
+    except (TypeError, ValueError):
+        return None
+    payload["brief_date"] = _row_get(row, "brief_date")
+    payload["stored_at"] = _row_get(row, "generated_at")
+    return payload
+
+
+def list_brief_dates(limit: int = 30) -> List[str]:
+    """Các ngày đã có bản tin, mới nhất trước."""
+    _init_schema_once()
+    with _conn() as con:
+        rows = _fetchall(
+            con,
+            "SELECT brief_date FROM daily_brief ORDER BY brief_date DESC LIMIT ?",
+            (limit,),
+        )
+    return [_row_get(r, "brief_date") for r in rows]
