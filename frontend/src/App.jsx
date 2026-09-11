@@ -143,7 +143,10 @@ export default function App() {
   // Polling giá thật từ vnstock. Mỗi 5s khi mở cửa, mỗi 60s khi đóng cửa (giữ giá ổn định).
   // Pause hoàn toàn khi tab ẩn — tiết kiệm rate limit của vnstock.
   useEffect(() => {
-    if (!selectedStock?.symbol || realtimePrice <= 0) return;
+    // Chờ nến lịch sử tải xong rồi mới poll giá. loadStockData đặt originalLastClose
+    // cùng lúc với realtimePrice, và originalLastClose có trong danh sách phụ thuộc —
+    // điều kiện dựa trên một state không khai báo phụ thuộc là đọc phải giá trị cũ.
+    if (!selectedStock?.symbol || originalLastClose <= 0) return;
     if (!isTabVisible) return;
 
     let cancelled = false;

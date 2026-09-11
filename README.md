@@ -314,6 +314,7 @@ backend/
   stock_service.py            # tải dữ liệu giá + tính chỉ báo
   market_service.py           # phiên giao dịch, giá realtime, chỉ số cơ bản
   ai_service.py               # AI giải thích một mã (không nhãn mua/bán)
+  gemini_client.py            # nơi duy nhất gọi Gemini (đổi SDK chỉ sửa file này)
   verdict_guard.py            # lọc câu mang tính chỉ dẫn mua/bán khỏi mọi văn bản AI
   storage_service.py          # cảnh báo + giao dịch thật + bản tin (SQLite / Postgres)
   safety_screen.py            # 6 tiêu chí ngưỡng cứng chặn mã rủi ro cho người mới
