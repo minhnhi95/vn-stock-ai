@@ -4,10 +4,9 @@ Một chỗ duy nhất gọi Gemini.
 App gọi Gemini ở ba nơi: AI giải thích một mã, review danh mục, và embedding cho
 tìm tin theo nghĩa. Gom về đây vì hai lẽ:
 
-1. Thư viện `google.generativeai` đã ngừng được hỗ trợ. Khi chuyển sang
-   `google-genai`, chỉ phải sửa file này — ba module kia không đổi.
-2. Thiếu thư viện không được làm sập cả backend. Trước đây ai_service import thẳng
-   SDK ở đầu file, nên thiếu SDK là main.py không khởi động được. Giờ thiếu SDK chỉ
+1. Đổi SDK chỉ phải sửa một file. File này đã chuyển từ `google.generativeai`
+   (ngừng được hỗ trợ) sang `google-genai` mà ba module kia không đổi dòng nào.
+2. Thiếu thư viện không được làm sập cả backend: import có chặn lỗi, thiếu SDK chỉ
    làm các tính năng AI báo lỗi rõ ràng.
 
 Test chỉ cần giả lập generate_text / embed_text, không phải giả lập cả SDK.
@@ -18,18 +17,20 @@ import os
 from typing import List, Optional
 
 try:
-    import google.generativeai as _sdk
+    from google import genai as _genai
+    from google.genai import types as _types
 
     HAS_SDK = True
 except ImportError:  # pragma: no cover - phụ thuộc môi trường cài đặt
-    _sdk = None
+    _genai = None
+    _types = None
     HAS_SDK = False
 
 # Đặt qua biến môi trường để đổi model mà không sửa code.
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
 
-_MISSING_SDK = "Chưa cài thư viện Gemini (google-generativeai) trong môi trường này."
+_MISSING_SDK = "Chưa cài thư viện Gemini (google-genai) trong môi trường này."
 
 
 def resolve_key(api_key: Optional[str]) -> str:
@@ -39,6 +40,12 @@ def resolve_key(api_key: Optional[str]) -> str:
 
 def is_available() -> bool:
     return HAS_SDK
+
+
+def _client(api_key: str):
+    # Tạo client theo từng lần gọi: key có thể khác nhau giữa các lần (key người dùng
+    # nhập trên giao diện, hoặc key của server), nên không giữ một client toàn cục.
+    return _genai.Client(api_key=api_key)
 
 
 def generate_text(
@@ -56,15 +63,20 @@ def generate_text(
     """
     if not HAS_SDK:
         raise RuntimeError(_MISSING_SDK)
-    _sdk.configure(api_key=api_key)
-    client = _sdk.GenerativeModel(model or GEMINI_MODEL)
-    if json_mode:
-        response = client.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"},
-        )
-    else:
-        response = client.generate_content(prompt)
+    config = (
+        _types.GenerateContentConfig(response_mime_type="application/json")
+        if json_mode
+        else None
+    )
+    # Giữ biến `client` suốt lời gọi. Client của google-genai tự đóng kết nối khi bị thu
+    # hồi bộ nhớ, nên viết gọn `_client(key).models.generate_content(...)` thì client tạm
+    # bị huỷ ngay sau khi lấy `.models`, và request báo "client has been closed".
+    client = _client(api_key)
+    response = client.models.generate_content(
+        model=model or GEMINI_MODEL,
+        contents=prompt,
+        config=config,
+    )
     return (response.text or "").strip()
 
 
@@ -77,7 +89,12 @@ def embed_text(
     """Vector embedding của một đoạn văn bản. Thiếu SDK thì trả None; lỗi mạng được ném ra."""
     if not HAS_SDK:
         return None
-    _sdk.configure(api_key=api_key)
-    result = _sdk.embed_content(model=EMBED_MODEL, content=text, task_type=task_type)
-    vec = result.get("embedding") if isinstance(result, dict) else getattr(result, "embedding", None)
-    return list(vec) if vec is not None else None
+    client = _client(api_key)  # giữ tham chiếu suốt lời gọi — xem generate_text
+    result = client.models.embed_content(
+        model=EMBED_MODEL,
+        contents=text,
+        config=_types.EmbedContentConfig(task_type=task_type.upper()),
+    )
+    embeddings = getattr(result, "embeddings", None) or []
+    values = getattr(embeddings[0], "values", None) if embeddings else None
+    return list(values) if values is not None else None

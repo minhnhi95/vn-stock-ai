@@ -441,13 +441,14 @@ dữ liệu mồi trả `null`, không phải số bịa.
 **Frontend → Vercel, Backend → Railway/Render, Database → Neon.**
 Chi tiết trong [DEPLOY.md](DEPLOY.md); `render.yaml` sẵn sàng nếu muốn Render thay Railway.
 
-**Backend KHÔNG chạy được trên Vercel** — không phải vì lười cấu hình mà vì ba
-ràng buộc kỹ thuật:
+**Backend KHÔNG chạy được trên Vercel** — không phải vì lười cấu hình mà vì các
+ràng buộc kỹ thuật dưới đây (riêng mục 2 và 3 đã đủ để loại Vercel):
 
-1. *Vượt giới hạn dung lượng.* Vercel Python function giới hạn 250 MB unzipped.
-   Riêng pandas + numpy (~112 MB) và google-generativeai kéo theo
-   google-api-python-client + grpc (~128 MB) đã ~240 MB, chưa tính vnstock,
-   yfinance, psycopg.
+1. *Sát giới hạn dung lượng.* Vercel Python function giới hạn 250 MB unzipped, và
+   riêng pandas + numpy đã ~112 MB, chưa tính vnstock, yfinance, psycopg. Bản cũ còn
+   dùng google-generativeai kéo theo grpc (~128 MB) nên vượt hẳn; sau khi chuyển
+   sang google-genai (không dùng grpc) phần này nhẹ hơn nhiều, nên dung lượng một
+   mình có thể không còn là lý do quyết định — chưa đo lại.
 2. *Cache in-process biến mất.* App dựa nhiều vào TTLCache (chỉ số cơ bản 1 giờ,
    heatmap 30 phút, index 1.721 mã 24 giờ). Serverless không giữ được bộ nhớ
    giữa các lần gọi → mỗi request lạnh phải dựng lại index từ vnstock, mà

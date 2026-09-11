@@ -87,7 +87,7 @@ class TestKetQuaPhanTich:
         monkeypatch.setattr(ai_service.gemini_client, "HAS_SDK", False)
         result = ai_service.get_ai_analysis("FPT", 74500, {}, "", "", api_key="fake")
         assert result["error"] == "api_error"
-        assert "google-generativeai" in result["error_detail"]
+        assert "google-genai" in result["error_detail"]
 
 
 class TestChat:
