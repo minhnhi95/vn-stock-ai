@@ -13,8 +13,6 @@ Các loại điều kiện hỗ trợ:
 - rsi_above / rsi_below      : so RSI(14) phiên gần nhất với threshold
 - ema_cross_up               : EMA20 vừa cắt LÊN EMA50 (phiên gần nhất so với phiên trước)
 - ema_cross_down             : EMA20 vừa cắt XUỐNG EMA50
-- ai_signal_change           : khuyến nghị AI thay đổi so với lần check trước
-                                (threshold không dùng — đặt 0)
 - news_new                   : có tin mới về doanh nghiệp kể từ lúc đặt cảnh báo
                                 (threshold không dùng — đặt 0)
 
@@ -37,7 +35,7 @@ from typing import Any, Dict, List, Optional
 VN_TZ = timezone(timedelta(hours=7))
 
 # Import phòng thủ: alerts engine phụ thuộc stock_service để lấy chỉ báo,
-# market_service để lấy giá realtime, ai_service để check signal change.
+# market_service để lấy giá realtime, news_service để lấy tin mới.
 # Nếu module nào fail import (vd thiếu dep) → engine vẫn run, chỉ skip condition đó.
 try:
     from market_service import fetch_realtime_price, TTLCache
@@ -81,7 +79,6 @@ VALID_CONDITIONS = {
     "rsi_below",
     "ema_cross_up",
     "ema_cross_down",
-    "ai_signal_change",
     "news_new",
 }
 
@@ -213,59 +210,9 @@ def _fetch_symbol_snapshot(symbol: str) -> Dict[str, Any]:
     return snap
 
 
-def _get_last_ai_signal(symbol: str) -> Optional[str]:
-    """Đọc khuyến nghị AI lần check trước. None nếu chưa từng lưu."""
-    return storage.get_ai_signals().get(symbol)
-
-
-def _set_last_ai_signal(symbol: str, recommendation: str) -> None:
-    """Lưu khuyến nghị AI mới nhất để lần check sau so sánh."""
-    storage.set_ai_signal(symbol, recommendation)
-
-
-def _fetch_current_ai_signal(symbol: str) -> Optional[str]:
-    """
-    Lấy khuyến nghị AI hiện tại. Trả None nếu không thể đánh giá
-    (vd thiếu API key, lỗi mạng) — engine sẽ bỏ qua rule ai_signal_change
-    thay vì giả thay đổi.
-
-    Lưu ý: gọi AI tốn cost. Engine batch sẵn bằng cache TTL 10s ở
-    _fetch_symbol_snapshot, nhưng AI call vẫn nên chạy ngoài hot-path.
-    Ở MVP này: AI signal được lưu ở bảng ai_signal, cập nhật bởi route
-    /analyze (caller bên ngoài). Engine chỉ so sánh.
-
-    Trả về None ở đây để rule ai_signal_change chỉ trigger khi
-    caller chủ động update qua update_ai_signal() bên dưới.
-    """
-    return None
-
-
-def update_ai_signal(symbol: str, recommendation: str) -> Dict[str, Any]:
-    """
-    Endpoint để route /analyze gọi sau mỗi lần AI trả khuyến nghị mới.
-    So sánh với signal cũ → nếu khác → đánh dấu các rule ai_signal_change
-    của symbol này pending trigger ở lần check_alerts() kế tiếp.
-
-    Trả về:
-        { "changed": bool, "previous": str|None, "current": str }
-    """
-    symbol = (symbol or "").strip().upper()
-    rec = (recommendation or "").strip().upper()
-    if not symbol or not rec:
-        return {"changed": False, "previous": None, "current": rec}
-
-    previous = _get_last_ai_signal(symbol)
-    changed = previous is not None and previous != rec
-    _set_last_ai_signal(symbol, rec)
-    if changed:
-        # Ghi xuống DB thay vì giữ trong process: check_alerts chạy ở request khác.
-        storage.mark_ai_signal_pending(symbol)
-    return {"changed": changed, "previous": previous, "current": rec}
-
-
 # ---------- Evaluators ----------
 # Mỗi evaluator nhận (rule, snapshot, ctx) → bool (triggered or not).
-# ctx chứa thông tin shared (vd ai_changed_symbols set) để evaluator dùng chung.
+# ctx chứa dữ liệu dùng chung cho cả lượt kiểm tra (vd tin mới nhất theo mã).
 
 def _eval_price_above(rule: Dict[str, Any], snap: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
     p = snap.get("price")
@@ -303,15 +250,6 @@ def _eval_ema_cross_down(rule: Dict[str, Any], snap: Dict[str, Any], ctx: Dict[s
     if None in (e20, e50, e20p, e50p):
         return False
     return e20p >= e50p and e20 < e50
-
-
-def _eval_ai_signal_change(rule: Dict[str, Any], snap: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
-    """
-    Trigger khi caller đã gọi update_ai_signal() với rec khác lần trước.
-    Engine không tự gọi AI ở đây để tránh cost. ctx["ai_changed_symbols"]
-    là set các symbol mới đổi tín hiệu trong batch check hiện tại.
-    """
-    return rule["symbol"] in ctx.get("ai_changed_symbols", set())
 
 
 def _parse_published_at(value: Any) -> Optional[int]:
@@ -383,39 +321,33 @@ _EVALUATORS = {
     "rsi_below": _eval_rsi_below,
     "ema_cross_up": _eval_ema_cross_up,
     "ema_cross_down": _eval_ema_cross_down,
-    "ai_signal_change": _eval_ai_signal_change,
     "news_new": _eval_news_new,
 }
 
 
 # ---------- Engine chính ----------
 
-def check_alerts(ai_changed_symbols: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+def check_alerts() -> List[Dict[str, Any]]:
     """
     Đánh giá toàn bộ rule active. Group theo symbol để fetch giá/chỉ báo 1 lần per symbol.
 
-    Args:
-        ai_changed_symbols: list symbol mà caller đã xác định AI signal vừa đổi
-                            (vd: sau khi route /analyze chạy xong). Engine không tự
-                            gọi AI để tránh cost — caller chủ động truyền vào.
+    Rule mang điều kiện đã gỡ (vd "ai_signal_change", gỡ cùng nhãn MUA/BÁN của AI)
+    vẫn có thể nằm trong DB cũ của người dùng. Chúng bị bỏ qua ngay từ đầu — không
+    tốn request lấy giá cho một rule không bao giờ bắn, và không làm hỏng cả lượt.
 
     Returns:
         Danh sách rule đã trigger lần này. Mỗi rule đã được mark_triggered
         (active=False, triggered_at=now) trước khi return.
     """
-    active_rules = [r for r in storage.list_alert_rules() if r.get("active")]
+    active_rules = [
+        r for r in storage.list_alert_rules()
+        if r.get("active") and r.get("condition") in _EVALUATORS
+    ]
 
     if not active_rules:
         return []
 
-    # Gộp symbol caller truyền vào với symbol đã được /analyze đánh dấu từ trước.
-    pending = storage.take_ai_signal_pending()
-    ctx = {
-        "ai_changed_symbols": {
-            s.strip().upper() for s in list(ai_changed_symbols or []) + pending if s
-        },
-        "news": {},
-    }
+    ctx: Dict[str, Any] = {"news": {}}
 
     # Chỉ lấy tin cho mã thật sự có rule news_new. Lấy cho mọi mã sẽ tốn thêm một
     # request vnstock mỗi mã mỗi lần check, trong khi hạn mức chỉ 20 request/phút.

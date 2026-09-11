@@ -8,7 +8,6 @@ const CONDITIONS = [
   { id: 'rsi_below', label: 'RSI xuống dưới', needsThreshold: true, unit: '', placeholder: '0 - 100, VD: 30' },
   { id: 'ema_cross_up', label: 'EMA cắt lên', needsThreshold: false, unit: '', placeholder: '' },
   { id: 'ema_cross_down', label: 'EMA cắt xuống', needsThreshold: false, unit: '', placeholder: '' },
-  { id: 'ai_signal_change', label: 'AI đổi tín hiệu', needsThreshold: false, unit: '', placeholder: '' },
   { id: 'news_new', label: 'Có tin mới', needsThreshold: false, unit: '', placeholder: '' },
 ];
 
@@ -26,7 +25,8 @@ const fmtNumber = (v) => {
 
 const describeAlert = (alert) => {
   const cond = CONDITION_MAP[alert.condition];
-  if (!cond) return alert.condition;
+  // Rule mang điều kiện đã gỡ (vd "AI đổi tín hiệu") vẫn có thể còn trong DB cũ.
+  if (!cond) return 'Điều kiện cũ, không còn được kiểm tra';
   if (!cond.needsThreshold) return cond.label;
   if (alert.condition === 'rsi_above' || alert.condition === 'rsi_below') {
     return `${cond.label} ${alert.threshold}`;

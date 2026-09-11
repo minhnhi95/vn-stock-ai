@@ -152,11 +152,11 @@ cd frontend && npm run lint
 | **Kiểm tra an toàn** | 6 tiêu chí ngưỡng cứng (thanh khoản, thị giá, nợ/vốn chủ, ROE, biên độ, rổ VN100). Chỉ chặn mã rủi ro, **không** gợi ý mã tốt. Quét được nhiều mã một lượt |
 | **Cơ bản có giải thích** | 13 chỉ số, mỗi chỉ số kèm một câu tiếng Việt đời thường ("Bạn trả 15,53 đồng để mua 1 đồng lợi nhuận mỗi năm"), trung vị cùng ngành để đối chiếu, và trường hợp con số đó đánh lừa |
 | Tin tức | Tin theo mã + tìm kiếm ngữ nghĩa |
-| AI | Phân tích tổng hợp kỹ thuật + cơ bản + tin tức + khối ngoại, chat hỏi đáp theo mã |
+| AI giải thích | Đọc giúp chỉ báo kỹ thuật, chỉ số cơ bản, tin tức và khối ngoại của một mã bằng tiếng Việt: dữ liệu nói gì, chỗ nào mâu thuẫn, rủi ro, câu hỏi để tự trả lời. **Không** nhãn MUA/BÁN, độ tin cậy hay giá mục tiêu; câu mang tính chỉ dẫn bị lọc (`verdict_guard.py`) |
 | **Danh mục thật** | Nhập sao kê CSV từ công ty chứng khoán → vị thế, giá vốn FIFO, lãi/lỗ **đã trừ phí và thuế TNCN 0,1%**, thống kê chi phí giao dịch |
 | Khối ngoại | Mua/bán ròng theo mã (khối lượng + VND) và xếp hạng toàn VN100 |
 | Toàn cảnh thị trường | Heatmap ngành theo mã đại diện VN100, khối ngoại mua/bán ròng |
-| Theo dõi | Cảnh báo giá / RSI / EMA cắt / AI đổi tín hiệu / **có tin mới**, tự kiểm tra + thông báo trình duyệt; một nút bật báo tin cho toàn bộ danh mục thật; lịch sự kiện; giao dịch nội bộ |
+| Theo dõi | Cảnh báo giá / RSI / EMA cắt / **có tin mới**, tự kiểm tra + thông báo trình duyệt; một nút bật báo tin cho toàn bộ danh mục thật; lịch sự kiện; giao dịch nội bộ |
 | **Bản tin sáng** | Job nền dùng Antigravity CLI viết bản tin tiếng Việt: chuyện gì xảy ra, **thị trường đã phản ánh chưa**, điều gì làm nhận định sai. Không chấm điểm, không khuyến nghị mua/bán |
 | Tìm kiếm | Toàn bộ ~1.700 mã niêm yết theo mã, tên doanh nghiệp hoặc ngành; không dấu vẫn khớp |
 
@@ -300,7 +300,8 @@ backend/
   vnstock_safe.py             # bootstrap: UTF-8 console + chặn sys.exit của vnstock
   stock_service.py            # tải dữ liệu giá + tính chỉ báo
   market_service.py           # phiên giao dịch, giá realtime, chỉ số cơ bản
-  ai_service.py               # prompt + gọi Gemini
+  ai_service.py               # AI giải thích một mã (không nhãn mua/bán)
+  verdict_guard.py            # lọc câu mang tính chỉ dẫn mua/bán khỏi mọi văn bản AI
   storage_service.py          # cảnh báo + giao dịch thật + bản tin (SQLite / Postgres)
   safety_screen.py            # 6 tiêu chí ngưỡng cứng chặn mã rủi ro cho người mới
   metric_explainer.py         # dịch chỉ số cơ bản sang tiếng Việt + so trung vị ngành
@@ -375,8 +376,8 @@ vì vứt đi. Heatmap chỉ được cache khi đủ ít nhất một nửa s�
 **Cảnh báo lưu ở DB, không phải file.** Production chạy `gunicorn --workers 2`:
 mỗi worker có state in-memory riêng và filesystem của Railway/Render là ephemeral,
 nên file JSON vừa mất đồng bộ giữa worker vừa bị xoá mỗi lần redeploy. Bảng `alert`
-và `ai_signal` nằm cùng DB với portfolio. Điều kiện "AI đổi tín hiệu" cũng đi qua
-bảng `ai_signal_pending` vì `/analyze` và `/alerts/check` là hai request riêng.
+nằm cùng DB với sổ giao dịch thật. Điều kiện "AI đổi tín hiệu" đã bị gỡ cùng nhãn
+MUA/BÁN của AI; rule cũ còn trong DB thì bị bỏ qua khi kiểm tra, không làm hỏng lượt.
 
 **Cảnh báo tự kiểm tra ở client.** Không có worker chạy nền — panel Cảnh báo poll
 `/api/alerts/check` mỗi 1 phút trong phiên (10 phút ngoài phiên) khi tab đang mở,

@@ -2,8 +2,18 @@ import google.generativeai as genai
 import json
 import os
 
+from verdict_guard import FILTER_NOTE, clean_fields, strip_verdicts
+
 # Model có thể override qua env var để dễ thử nghiệm/giảm chi phí.
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Các trường AI được phép trả về. Cố ý KHÔNG có recommendation, confidence,
+# target_price hay stop_loss: người mới thấy "MUA MẠNH — độ tin cậy 85%" sẽ làm
+# theo, trong khi một mô hình đọc vài chỉ báo không có căn cứ nào đủ chắc để đưa
+# ra nhãn đó. Trường nào ngoài danh sách này đều bị bỏ trước khi tới giao diện,
+# kể cả khi mô hình tự thêm vào.
+TEXT_FIELDS = ("tong_quan", "ky_thuat", "xu_huong", "co_ban", "tin_tuc", "mau_thuan")
+LIST_FIELDS = ("rui_ro", "cau_hoi_tu_hoi")
 
 
 def _build_analysis_prompt(symbol, current_price, indicators, history_summary, intraday_summary, fundamentals_summary="", news_summary="", extra_context=""):
@@ -16,8 +26,9 @@ def _build_analysis_prompt(symbol, current_price, indicators, history_summary, i
     extra_block = extra_context or "Không có dữ liệu bổ sung."
 
     return f"""
-    Bạn là Chuyên gia phân tích kỹ thuật + cơ bản + bối cảnh tin tức (technical + fundamental + sentiment) cấp cao tại thị trường chứng khoán Việt Nam.
-    Hãy kết hợp CẢ BA khía cạnh để đánh giá cổ phiếu {symbol}.
+    Bạn đang giải thích cổ phiếu {symbol} cho một người MỚI tìm hiểu chứng khoán Việt Nam.
+    Việc của bạn là đọc giúp các con số dưới đây bằng tiếng Việt đời thường — không phải
+    quyết định giúp họ.
 
     [1] DỮ LIỆU KỸ THUẬT
     - Giá đóng cửa hiện tại: {current_price}
@@ -44,26 +55,27 @@ def _build_analysis_prompt(symbol, current_price, indicators, history_summary, i
     [4] BỐI CẢNH BỔ SUNG
     {extra_block}
 
-    HƯỚNG DẪN:
-    - Kỹ thuật xác định ĐIỂM VÀO/RA ngắn hạn.
-    - Cơ bản xác định CHẤT LƯỢNG doanh nghiệp & định giá. P/E < trung bình ngành + ROE > 15% + tăng trưởng LNST dương = nền tảng vững.
-    - Tin tức xác định CATALYST/RỦI RO ngắn hạn. Tin tích cực mạnh + xu hướng kỹ thuật tốt → tăng confidence. Tin tiêu cực (điều tra, thoái vốn, kết quả kém) → cẩn trọng cho dù chỉ báo kỹ thuật đẹp.
-    - Nếu 3 khía cạnh XUNG ĐỘT: giảm confidence, nêu rõ mâu thuẫn trong summary.
-    - target_price và stop_loss phải hợp lý so với biến động lịch sử (không đặt mục tiêu cách giá hiện tại > 30%).
-    - Tuyệt đối KHÔNG bịa số liệu — nếu khía cạnh nào thiếu dữ liệu, ghi "Không có dữ liệu".
+    QUY TẮC BẮT BUỘC:
+    1. TUYỆT ĐỐI KHÔNG khuyên mua, bán hay nắm giữ. Không chấm điểm, không nêu mức chắc
+       chắn của nhận định, không đưa giá mục tiêu, vùng mua, mức cắt lỗ hay chốt lời.
+    2. Chỉ dùng số liệu có trong dữ liệu trên. Không bịa số. Khía cạnh nào thiếu dữ liệu
+       thì ghi "Không có dữ liệu".
+    3. Thuật ngữ nào dùng lần đầu (RSI, MACD, EMA, P/E...) thì giải thích bằng một câu ngắn.
+    4. Nếu các nguồn dữ liệu nói ngược nhau, nói rõ ở mục mau_thuan — với người mới, đó
+       là thông tin quan trọng nhất.
+    5. cau_hoi_tu_hoi là câu hỏi người đọc nên TỰ trả lời trước khi quyết định, ví dụ
+       "Nếu giá giảm thêm 15% thì bạn sẽ làm gì?" — không phải lời khuyên trá hình.
 
     Xuất ra duy nhất một JSON theo cấu trúc dưới, KHÔNG kèm markdown:
     {{
-        "recommendation": "STRONG_BUY" | "BUY" | "HOLD" | "SELL" | "STRONG_SELL",
-        "confidence": 0-100,
-        "target_price": number,
-        "stop_loss": number,
-        "summary": "Tổng hợp ngắn gọn 3 khía cạnh + dòng tiền (2-3 câu)",
-        "technical_analysis": "Phân tích RSI, MACD, EMA (3-4 câu)",
-        "trend_analysis": "Xu hướng ngắn và trung hạn (2-3 câu)",
-        "fundamental_analysis": "Nhận xét P/E, P/B, ROE, tăng trưởng (2-3 câu)",
-        "news_sentiment": "Tổng hợp tâm lý từ tin tức gần đây và tác động tiềm năng (2-3 câu)",
-        "action_plan": "Hành động cụ thể cho nhà đầu tư cá nhân (2-3 câu)"
+        "tong_quan": "2-3 câu: bức tranh chung mà dữ liệu cho thấy",
+        "ky_thuat": "RSI, MACD, EMA đang cho thấy gì, giải thích dễ hiểu (3-4 câu)",
+        "xu_huong": "Xu hướng giá ngắn và trung hạn dựa trên EMA (2-3 câu)",
+        "co_ban": "Các chỉ số cơ bản nói gì về doanh nghiệp (2-3 câu)",
+        "tin_tuc": "Tin gần đây có gì đáng chú ý và vì sao (2-3 câu)",
+        "mau_thuan": "Chỗ các nguồn dữ liệu nói ngược nhau, hoặc 'Không có'",
+        "rui_ro": ["2-4 rủi ro cụ thể, mỗi ý một câu"],
+        "cau_hoi_tu_hoi": ["2-3 câu hỏi người đọc nên tự trả lời"]
     }}
 
     LƯU Ý: Phản hồi PHẢI là chuỗi JSON hợp lệ parse được bằng json.loads().
@@ -81,26 +93,44 @@ def _strip_json_fence(text: str) -> str:
     return t.strip()
 
 
+def _error_result(code: str, message: str, detail: str = "") -> dict:
+    result = {"tong_quan": message, "error": code}
+    if detail:
+        result["error_detail"] = detail[:500]
+    return result
+
+
+def sanitize_analysis(raw) -> dict:
+    """
+    Chỉ giữ các trường cho phép và lọc câu mang tính chỉ dẫn mua/bán.
+
+    Mô hình vẫn có thể trả thêm "recommendation" dù prompt đã cấm — trường lạ bị bỏ
+    ở đây và không bao giờ tới giao diện. Nếu có câu bị lọc, kết quả nói rõ điều đó
+    thay vì âm thầm cắt.
+    """
+    if not isinstance(raw, dict):
+        return _error_result("api_error", "AI trả về dữ liệu không đọc được.")
+    clean, removed = clean_fields(raw, TEXT_FIELDS, LIST_FIELDS)
+    if removed:
+        clean["da_loc"] = removed
+        clean["ghi_chu_loc"] = FILTER_NOTE
+    return clean
+
+
 def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history_summary: str, intraday_summary: str, api_key: str, fundamentals_summary: str = "", news_summary: str = "", foreign_summary: str = "", mtf_summary: str = ""):
     """
-    Gọi Gemini API phân tích chỉ báo kỹ thuật + dòng tiền nội ngày.
-    Trả về JSON gồm khuyến nghị, độ tin cậy, giá mục tiêu, stop-loss, và các giải thích.
+    Nhờ Gemini diễn giải chỉ báo kỹ thuật, chỉ số cơ bản và tin tức của một mã.
+
+    Trả về các đoạn giải thích + rủi ro + câu hỏi tự kiểm tra. Không có khuyến
+    nghị, độ tin cậy, giá mục tiêu hay mức cắt lỗ — xem sanitize_analysis.
     """
     active_key = api_key or os.getenv("GEMINI_API_KEY")
 
     if not active_key:
-        return {
-            "recommendation": "HOLD",
-            "confidence": 0,
-            "target_price": current_price,
-            "stop_loss": current_price * 0.95,
-            "summary": "Thiếu API Key cho AI.",
-            "technical_analysis": "Vui lòng nhập Gemini API Key ở góc trên màn hình để sử dụng tính năng phân tích AI.",
-            "trend_analysis": "Chưa thể phân tích xu hướng.",
-            "fundamental_analysis": "Chưa thể phân tích cơ bản.",
-            "action_plan": "Nhập API Key hợp lệ để bắt đầu nhận tín hiệu mua/bán.",
-            "error": "missing_api_key",
-        }
+        return _error_result(
+            "missing_api_key",
+            "Chưa có Gemini API Key — nhập key ở góc trên màn hình để AI giải thích mã này.",
+        )
 
     extra_blocks = []
     if foreign_summary:
@@ -119,7 +149,6 @@ def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history
         extra_context="\n\n".join(extra_blocks),
     )
 
-    structured_error = None
     try:
         genai.configure(api_key=active_key)
         model = genai.GenerativeModel(GEMINI_MODEL)
@@ -127,63 +156,65 @@ def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history
             prompt,
             generation_config={"response_mime_type": "application/json"}
         )
-        return json.loads(response.text.strip())
+        return sanitize_analysis(json.loads(response.text.strip()))
     except Exception as e:
-        structured_error = str(e)
-        print(f"Error invoking Gemini API (structured mode): {structured_error}")
+        print(f"Error invoking Gemini API (structured mode): {e}")
 
     try:
         genai.configure(api_key=active_key)
         model = genai.GenerativeModel(GEMINI_MODEL)
         response = model.generate_content(prompt)
-        return json.loads(_strip_json_fence(response.text))
+        return sanitize_analysis(json.loads(_strip_json_fence(response.text)))
     except Exception as err:
         err_msg = str(err)
+        lowered = err_msg.lower()
         # Phân loại lỗi để UI hiển thị cảnh báo chính xác
-        if "API key" in err_msg or "API_KEY" in err_msg or "invalid" in err_msg.lower() and "key" in err_msg.lower():
+        if "API key" in err_msg or "API_KEY" in err_msg or ("invalid" in lowered and "key" in lowered):
             err_code = "invalid_api_key"
-        elif "quota" in err_msg.lower() or "rate" in err_msg.lower() or "429" in err_msg:
+        elif "quota" in lowered or "rate" in lowered or "429" in err_msg:
             err_code = "quota_exceeded"
-        elif "network" in err_msg.lower() or "connection" in err_msg.lower() or "timeout" in err_msg.lower():
+        elif "network" in lowered or "connection" in lowered or "timeout" in lowered:
             err_code = "network_error"
         else:
             err_code = "api_error"
-        return {
-            "recommendation": "HOLD",
-            "confidence": 0,
-            "target_price": current_price,
-            "stop_loss": current_price * 0.93,
-            "summary": "Không thể hoàn tất phân tích AI tại thời điểm này.",
-            "technical_analysis": f"Lỗi từ Gemini API: {err_msg[:200]}",
-            "trend_analysis": "Dữ liệu xu hướng tạm thời bị gián đoạn.",
-            "fundamental_analysis": "Không có dữ liệu cơ bản.",
-            "action_plan": "Vui lòng thử lại sau vài giây hoặc kiểm tra tính hợp lệ của API Key.",
-            "error": err_code,
-            "error_detail": err_msg[:500],
-        }
+        return _error_result(err_code, "Không thể hoàn tất phần giải thích của AI lúc này.", err_msg)
+
+
+def guard_chat_answer(text: str) -> str:
+    """Bỏ câu mang tính chỉ dẫn mua/bán khỏi câu trả lời chat, và nói rõ là đã bỏ."""
+    clean, removed = strip_verdicts(text)
+    if not removed:
+        return text
+    return f"{clean}\n\n({FILTER_NOTE})" if clean else FILTER_NOTE
 
 
 def chat_about_stock(symbol: str, message: str, chart_data_summary: str, api_key: str):
     active_key = api_key or os.getenv("GEMINI_API_KEY")
     if not active_key:
-        return "Vui lòng nhập Gemini API Key để chat với AI."
+        return "Vui lòng nhập Gemini API Key để hỏi AI."
 
     try:
         genai.configure(api_key=active_key)
         model = genai.GenerativeModel(GEMINI_MODEL)
 
         prompt = f"""
-        Bạn là Cố vấn đầu tư chứng khoán Việt Nam thông thái. Người dùng đang xem biểu đồ cổ phiếu {symbol}.
+        Bạn đang giúp một người MỚI tìm hiểu chứng khoán hiểu về cổ phiếu {symbol}.
 
-        Tóm tắt dữ liệu kỹ thuật hiện tại của {symbol}:
+        Dữ liệu hiện tại của {symbol}:
         {chart_data_summary}
 
         Câu hỏi của người dùng: "{message}"
 
-        Trả lời rõ ràng, ngắn gọn, dễ hiểu và mang tính tư vấn chuyên môn cao. Trả lời bằng tiếng Việt.
+        Quy tắc:
+        - Trả lời bằng tiếng Việt, ngắn gọn, dễ hiểu; giải thích thuật ngữ khi dùng.
+        - TUYỆT ĐỐI KHÔNG khuyên mua, bán hay nắm giữ; không đưa giá mục tiêu, vùng mua hay
+          mức cắt lỗ. Nếu được hỏi có nên mua hoặc bán không, hãy nói rõ bạn không đưa
+          khuyến nghị, rồi chỉ ra những yếu tố người hỏi cần tự cân nhắc và số liệu nào ở
+          trên liên quan.
+        - Chỉ dùng số liệu có trong dữ liệu trên; không bịa.
         """
 
         response = model.generate_content(prompt)
-        return response.text.strip()
+        return guard_chat_answer(response.text.strip())
     except Exception as e:
         return f"Lỗi khi gửi câu hỏi đến AI: {str(e)}"

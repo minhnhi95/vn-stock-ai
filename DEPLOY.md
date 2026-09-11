@@ -126,7 +126,7 @@ Railway tự restart sau khi save.
    "Thiếu dữ liệu" chứ không phải "Đạt"
 5. Nhập một dòng giao dịch tay → reload trang → vẫn thấy vị thế (đã persist vào
    Neon Postgres)
-6. Bấm **Phân tích AI** → trả về phân tích có cấu trúc
+6. Bấm **Giải thích mã này** → AI trả về phần diễn giải, không có nhãn mua/bán hay giá mục tiêu
 
 Nếu CORS error trong DevTools console → kiểm tra `CORS_ORIGINS` ở Railway đúng URL Vercel chưa (KHÔNG có trailing slash, KHÔNG có `/api`).
 

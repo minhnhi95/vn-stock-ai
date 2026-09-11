@@ -130,15 +130,6 @@ CREATE TABLE IF NOT EXISTS alert (
     active INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_alert_symbol ON alert(symbol);
-CREATE TABLE IF NOT EXISTS ai_signal (
-    symbol TEXT PRIMARY KEY,
-    recommendation TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS ai_signal_pending (
-    symbol TEXT PRIMARY KEY,
-    marked_at INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS real_txn (
     id TEXT PRIMARY KEY,
     ext_id TEXT UNIQUE,
@@ -173,15 +164,6 @@ CREATE TABLE IF NOT EXISTS alert (
     active BOOLEAN NOT NULL DEFAULT TRUE
 );
 CREATE INDEX IF NOT EXISTS idx_alert_symbol ON alert(symbol);
-CREATE TABLE IF NOT EXISTS ai_signal (
-    symbol TEXT PRIMARY KEY,
-    recommendation TEXT NOT NULL,
-    updated_at BIGINT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS ai_signal_pending (
-    symbol TEXT PRIMARY KEY,
-    marked_at BIGINT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS real_txn (
     id TEXT PRIMARY KEY,
     ext_id TEXT UNIQUE,
@@ -321,64 +303,8 @@ def mark_alert_rule_triggered(alert_id: str, triggered_at: int) -> None:
         _commit(con)
 
 
-def get_ai_signals() -> Dict[str, str]:
-    """Khuyến nghị AI gần nhất theo mã — để phát hiện lúc tín hiệu đổi chiều."""
-    _init_schema_once()
-    with _conn() as con:
-        rows = _fetchall(con, "SELECT symbol, recommendation FROM ai_signal")
-    return {_row_get(r, "symbol"): _row_get(r, "recommendation") for r in rows}
-
-
-def set_ai_signal(symbol: str, recommendation: str) -> None:
-    """Upsert — cùng cú pháp cho SQLite 3.24+ và Postgres 9.5+."""
-    _init_schema_once()
-    with _conn() as con:
-        _begin(con)
-        _execute(
-            con,
-            "INSERT INTO ai_signal(symbol, recommendation, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT (symbol) DO UPDATE SET recommendation = EXCLUDED.recommendation, "
-            "updated_at = EXCLUDED.updated_at",
-            (symbol, recommendation, int(time.time())),
-        )
-        _commit(con)
-
-
-def mark_ai_signal_pending(symbol: str) -> None:
-    """
-    Ghi nhận symbol vừa đổi khuyến nghị AI.
-
-    Cần bảng riêng vì /analyze và /alerts/check là hai request khác nhau (và có
-    thể ở hai worker khác nhau) — không thể truyền trạng thái qua biến in-process.
-    """
-    _init_schema_once()
-    with _conn() as con:
-        _begin(con)
-        _execute(
-            con,
-            "INSERT INTO ai_signal_pending(symbol, marked_at) VALUES (?, ?) "
-            "ON CONFLICT (symbol) DO UPDATE SET marked_at = EXCLUDED.marked_at",
-            (symbol, int(time.time())),
-        )
-        _commit(con)
-
-
-def take_ai_signal_pending() -> List[str]:
-    """Đọc và xoá danh sách symbol đang chờ xử lý (one-shot, tránh bắn lặp)."""
-    _init_schema_once()
-    with _conn() as con:
-        _begin(con)
-        rows = _fetchall(con, "SELECT symbol FROM ai_signal_pending")
-        symbols = [_row_get(r, "symbol") for r in rows]
-        if symbols:
-            _execute(con, "DELETE FROM ai_signal_pending")
-        _commit(con)
-    return symbols
-
-
 # ---------- Giao dịch thật ----------
-# Tách khỏi `txn` (portfolio giả lập) vì hai vòng đời khác nhau: giả lập reset
-# thoải mái, còn sổ giao dịch thật mất là không khôi phục được.
+# Sổ giao dịch thật của người dùng: mất là không khôi phục được.
 
 def _real_txn_to_dict(row) -> Dict[str, Any]:
     return {

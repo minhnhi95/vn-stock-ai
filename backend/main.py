@@ -68,7 +68,6 @@ try:
         list_alerts,
         delete_alert,
         check_alerts,
-        update_ai_signal,
     )
     _ALERTS_OK = True
 except Exception as _e:
@@ -411,17 +410,6 @@ def analyze_stock(req: AnalysisRequest, mtf: bool = Query(False, description="In
             "news": news_items,
             "analysis": analysis_result,
         }
-        # Ghi lại khuyến nghị để rule "AI đổi tín hiệu" có cái mà so sánh.
-        # Best-effort: lỗi ở đây không được làm hỏng kết quả phân tích.
-        if _ALERTS_OK and isinstance(analysis_result, dict):
-            recommendation = analysis_result.get("recommendation")
-            if recommendation:
-                try:
-                    response_signal = update_ai_signal(symbol, str(recommendation))
-                    response["ai_signal"] = response_signal
-                except Exception as se:
-                    print(f"[analyze] update_ai_signal failed for {symbol}: {se}")
-
         if foreign_data is not None:
             response["foreign"] = foreign_data
         if mtf_data is not None:

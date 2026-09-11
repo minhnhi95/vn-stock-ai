@@ -9,7 +9,8 @@ Quy trình:
    - Sector exposure: 1 ngành > 40%
    - Correlation pairs: tương quan giá (proxy bằng pearson trên close 6 tháng)
    - Risk-adjusted return so với VNIndex
-4. Đẩy snapshot vào Gemini → structured JSON khuyến nghị rebalance
+4. Tùy chọn: Gemini diễn giải các quan sát bằng lời — không chấm điểm, không
+   xếp mức rủi ro, không đưa hành động mua/bán (xem verdict_guard).
 
 Cache 10 phút (review nặng — tránh spam khi user click liên tục).
 Tất cả comment + reason tiếng Việt theo convention dự án.
@@ -27,6 +28,7 @@ import pandas as pd
 from market_service import TTLCache, fetch_realtime_price
 from stock_service import fetch_stock_data
 import storage_service
+from verdict_guard import FILTER_NOTE, clean_fields
 
 try:
     import yfinance as yf
@@ -132,6 +134,26 @@ def _lookup_sector_vnstock(symbol: str) -> Optional[str]:
     return None
 
 
+def _lookup_sector_icb(symbol: str) -> Optional[str]:
+    """
+    Tên ngành ICB cấp 2 tiếng Việt từ sector_service (cache 24h).
+
+    Cùng nguồn với heatmap ngành và bảng trung vị ngành, để một mã không mang hai
+    tên ngành khác nhau ở hai panel khác nhau.
+    """
+    try:
+        from sector_service import get_industries
+    except Exception:
+        return None
+    try:
+        for industry in get_industries():
+            if symbol in (industry.get("symbols") or []):
+                return industry.get("name")
+    except Exception:
+        return None
+    return None
+
+
 def get_sector(symbol: str) -> str:
     """Trả về ngành của mã. Cache 1 ngày. Fallback map nếu vnstock fail."""
     symbol = symbol.strip().upper()
@@ -140,7 +162,14 @@ def get_sector(symbol: str) -> str:
     if cached is not None:
         return cached
 
-    sector = _lookup_sector_vnstock(symbol) or _SECTOR_FALLBACK.get(symbol) or "Không xác định"
+    # Ưu tiên tên ngành ICB tiếng Việt, cùng nguồn với heatmap và bảng trung vị ngành.
+    # Company.overview() trả tên tiếng Anh ("Food & Beverage") nên chỉ dùng cuối cùng.
+    sector = (
+        _lookup_sector_icb(symbol)
+        or _SECTOR_FALLBACK.get(symbol)
+        or _lookup_sector_vnstock(symbol)
+        or "Không xác định"
+    )
     _cache.set(cache_key, sector, SECTOR_TTL_SECONDS)
     return sector
 
@@ -313,8 +342,14 @@ def _portfolio_return_6mo(holdings_snapshots: List[Dict[str, Any]]) -> Optional[
 
 # ---------- Gemini prompt ----------
 
-def _build_review_prompt(metrics: Dict[str, Any]) -> str:
-    """Dựng prompt cho Gemini từ metrics đã tính sẵn."""
+def _build_review_prompt(metrics: Dict[str, Any], observations: List[str]) -> str:
+    """
+    Dựng prompt nhờ Gemini DIỄN GIẢI các quan sát đã tính sẵn bằng Python.
+
+    Không xin điểm, không xin mức rủi ro, không xin hành động: với người mới,
+    "danh mục 45/100 — bán bớt VCB" là một lệnh, và AI không có căn cứ để ra lệnh
+    trên tiền thật của người khác.
+    """
     h_lines = []
     for h in metrics["holdings"]:
         rsi = f"{h['rsi']:.1f}" if h.get("rsi") is not None else "N/A"
@@ -341,24 +376,21 @@ def _build_review_prompt(metrics: Dict[str, Any]) -> str:
     port_ret = metrics.get("portfolio_return_6mo")
     vnindex_str = f"{vnindex_ret:+.2f}%" if vnindex_ret is not None else "N/A"
     port_str = f"{port_ret:+.2f}%" if port_ret is not None else "N/A"
-    alpha = port_ret - vnindex_ret if (port_ret is not None and vnindex_ret is not None) else None
-    alpha_str = f"{alpha:+.2f}%" if alpha is not None else "N/A"
 
     cash = metrics["cash"]
     nav = metrics["total_nav"]
     cash_pct = (cash / nav * 100.0) if nav > 0 else 0.0
+    obs_block = "\n".join(f"  - {o}" for o in observations) if observations else "  (Không có)"
 
     return f"""
-Bạn là Chuyên gia Quản lý Danh mục Đầu tư cấp cao tại thị trường chứng khoán Việt Nam.
-Hãy đánh giá TOÀN BỘ danh mục dưới đây và đưa khuyến nghị tái cơ cấu.
+Bạn đang giải thích danh mục cổ phiếu của một người MỚI đầu tư, bằng tiếng Việt đời thường.
 
 [1] TỔNG QUAN DANH MỤC
 - Tổng NAV: {nav:,.0f}đ (vốn ban đầu: {metrics['initial_capital']:,.0f}đ)
 - Tiền mặt: {cash:,.0f}đ ({cash_pct:.1f}% NAV)
 - Số mã nắm giữ: {len(metrics['holdings'])}
-- Return danh mục 6 tháng: {port_str}
-- Return VNIndex 6 tháng: {vnindex_str}
-- Alpha (vs VNIndex): {alpha_str}
+- Biến động 6 tháng của các mã trong danh mục (bình quân theo vốn): {port_str}
+- VN-Index 6 tháng: {vnindex_str}
 
 [2] CHI TIẾT TỪNG MÃ
 {holdings_block}
@@ -369,32 +401,24 @@ Hãy đánh giá TOÀN BỘ danh mục dưới đây và đưa khuyến nghị t
 [4] CẶP CỔ PHIẾU TƯƠNG QUAN CAO (|corr| >= {CORRELATION_THRESHOLD})
 {corr_block}
 
-[5] CẢNH BÁO TỰ ĐỘNG ĐÃ TÍNH SẴN
-- Concentration warning: {metrics.get('concentration_flag', 'OK')}
-- Sector warning: {metrics.get('sector_flag', 'OK')}
-- Correlation warning: {metrics.get('correlation_flag', 'OK')}
+[5] CẢNH BÁO NGƯỠNG ĐÃ TÍNH SẴN
+- Tập trung một mã: {metrics.get('concentration_flag') or 'Không'}
+- Tập trung một ngành: {metrics.get('sector_flag') or 'Không'}
+- Tương quan: {metrics.get('correlation_flag') or 'Không'}
 
-HƯỚNG DẪN CHẤM ĐIỂM:
-- overall_score 0-100: phản ánh chất lượng danh mục (đa dạng + alpha + chỉ báo kỹ thuật).
-  + > 80: danh mục cân đối, alpha tốt, không có rủi ro tập trung lớn.
-  + 60-80: ổn nhưng có 1-2 điểm cần điều chỉnh.
-  + 40-60: rủi ro rõ rệt (concentration HOẶC sector HOẶC alpha âm).
-  + < 40: nhiều vấn đề chồng chéo, cần tái cơ cấu mạnh.
-- risk_level: LOW (đa dạng tốt, không cảnh báo nào), MEDIUM (1 cảnh báo), HIGH (>= 2 cảnh báo HOẶC concentration > 50%).
-- recommendation: tổng hợp 2-3 câu — chiến lược chính.
-- rebalance_suggestions: 3-5 hành động cụ thể (ví dụ: "Giảm tỷ trọng VCB từ 35% xuống 20% — chốt lời 1 phần",
-  "Bổ sung 1 mã ngành Tiêu dùng để giảm phụ thuộc Ngân hàng", "Cắt lỗ ABC do RSI > 80 và MACD đảo chiều").
-  Mỗi suggestion 1 câu, hành động rõ ràng, KHÔNG chung chung kiểu "theo dõi sát".
+[6] QUAN SÁT ĐÃ TÍNH SẴN
+{obs_block}
+
+QUY TẮC BẮT BUỘC:
+1. TUYỆT ĐỐI KHÔNG đưa hành động: không bảo mua thêm, bán bớt, chốt lời, cắt lỗ hay tái
+   cơ cấu. Không chấm điểm, không xếp mức rủi ro cao hay thấp.
+2. Chỉ giải thích các quan sát trên nghĩa là gì với tiền của người này. Không bịa số.
+3. Viết như đang giải thích cho người thân chưa từng đầu tư.
 
 Xuất ra DUY NHẤT một JSON theo cấu trúc dưới, KHÔNG kèm markdown:
 {{
-  "overall_score": <0-100 integer>,
-  "risk_level": "LOW" | "MEDIUM" | "HIGH",
-  "concentration_warning": "<mô tả 1 câu>" hoặc null,
-  "sector_warning": "<mô tả 1 câu>" hoặc null,
-  "correlation_warning": "<mô tả 1 câu>" hoặc null,
-  "recommendation": "<2-3 câu tổng hợp chiến lược>",
-  "rebalance_suggestions": ["<hành động 1>", "<hành động 2>", "<hành động 3>"]
+  "dien_giai": "<3-5 câu diễn giải các quan sát>",
+  "rui_ro_chinh": ["<2-3 rủi ro cụ thể, dựa trên quan sát>"]
 }}
 
 LƯU Ý: Phản hồi PHẢI là chuỗi JSON hợp lệ parse được bằng json.loads().
@@ -505,60 +529,86 @@ def _strip_json_fence(text: str) -> str:
     return t.strip()
 
 
-def _heuristic_review(metrics: Dict[str, Any]) -> Dict[str, Any]:
-    """Khuyến nghị fallback khi không có Gemini API key — dùng rule-based."""
-    flags = [metrics.get("concentration_flag"), metrics.get("sector_flag"), metrics.get("correlation_flag")]
-    num_flags = sum(1 for f in flags if f)
-    top_holding = max(metrics["holdings"], key=lambda x: x["weight_pct"], default=None)
-    top_weight = top_holding["weight_pct"] if top_holding else 0.0
+# Mức giảm giả định dùng trong câu hỏi "nếu mã lớn nhất giảm X%". 20% là mức một
+# cổ phiếu Việt Nam giảm trong vài tuần không hiếm, đủ để câu hỏi có sức nặng.
+_STRESS_DROP_PCT = 20.0
 
-    if num_flags >= 2 or top_weight > 50.0:
-        risk_level = "HIGH"
-        score = 35
-    elif num_flags == 1:
-        risk_level = "MEDIUM"
-        score = 60
-    else:
-        risk_level = "LOW"
-        score = 78
 
-    # Alpha vào điểm
-    port_ret = metrics.get("portfolio_return_6mo")
-    vn_ret = metrics.get("vnindex_return_6mo")
-    if port_ret is not None and vn_ret is not None:
-        alpha = port_ret - vn_ret
-        score += max(min(int(alpha), 15), -15)
-    score = max(0, min(100, score))
+def _observations(metrics: Dict[str, Any]) -> List[str]:
+    """Quan sát thuần số học về danh mục. Mô tả, không phải hành động."""
+    obs: List[str] = []
+    holdings = metrics["holdings"]
+    obs.append(
+        f"Danh mục có {len(holdings)} mã, tổng giá trị thị trường {metrics['total_nav']:,.0f}đ."
+    )
+    top = max(holdings, key=lambda x: x["weight_pct"], default=None)
+    if top:
+        obs.append(
+            f"Mã chiếm tỷ trọng lớn nhất là {top['symbol']} với {top['weight_pct']:.1f}% danh mục."
+        )
+    sectors = metrics.get("sector_breakdown") or []
+    if sectors:
+        parts = ", ".join(f"{s['sector']} {s['weight_pct']:.0f}%" for s in sectors[:4])
+        obs.append(f"Phân bổ theo ngành: {parts}.")
+    pairs = metrics.get("high_correlation_pairs") or []
+    if pairs:
+        top_pairs = ", ".join(f"{p['a']}–{p['b']}" for p in pairs[:3])
+        obs.append(
+            f"{len(pairs)} cặp mã có giá thường đi cùng chiều (tương quan từ "
+            f"{CORRELATION_THRESHOLD} trở lên): {top_pairs}. Khi một mã giảm, mã kia thường giảm theo."
+        )
+    port, vn = metrics.get("portfolio_return_6mo"), metrics.get("vnindex_return_6mo")
+    if port is not None and vn is not None:
+        obs.append(
+            f"6 tháng qua, các mã trong danh mục biến động {port:+.1f}% "
+            f"(bình quân theo vốn), VN-Index {vn:+.1f}%."
+        )
+    return obs
 
-    suggestions = []
-    if metrics.get("concentration_flag"):
-        suggestions.append(f"Giảm tỷ trọng {top_holding['symbol']} — chốt lời 1 phần để đưa về dưới 25% NAV.")
-    if metrics.get("sector_flag"):
-        top_sec = metrics["sector_breakdown"][0]
-        suggestions.append(f"Đa dạng hóa khỏi ngành '{top_sec['sector']}' — bổ sung 1 mã ngành khác.")
-    if metrics.get("correlation_flag"):
-        suggestions.append("Cân nhắc cắt giảm 1 trong các cặp tương quan cao để giảm rủi ro hệ thống.")
-    # Đề xuất kỹ thuật cho từng holding
-    for h in metrics["holdings"]:
-        if h.get("rsi") is not None and h["rsi"] > 75 and h["pnl_pct"] > 15:
-            suggestions.append(f"Cân nhắc chốt lời 1 phần {h['symbol']} — RSI={h['rsi']:.0f} quá mua, đã lãi {h['pnl_pct']:+.0f}%.")
-        elif h.get("rsi") is not None and h["rsi"] < 30 and h["pnl_pct"] < -10:
-            suggestions.append(f"Xem xét cắt lỗ {h['symbol']} — RSI={h['rsi']:.0f} chưa thoát đáy, đã lỗ {h['pnl_pct']:+.0f}%.")
-    if not suggestions:
-        suggestions = ["Danh mục đang cân đối — duy trì vị thế và theo dõi tín hiệu kỹ thuật từng mã."]
 
+def _questions(metrics: Dict[str, Any]) -> List[str]:
+    """
+    Câu hỏi để người dùng tự trả lời, kèm con số tính sẵn cho cụ thể.
+
+    "Danh mục của bạn quá tập trung" là một phán xét. "Nếu VCB giảm 20% thì cả danh
+    mục giảm 10% — bạn chấp nhận được không?" là một phép tính, và người đọc tự quyết.
+    """
+    qs: List[str] = []
+    top = max(metrics["holdings"], key=lambda x: x["weight_pct"], default=None)
+    if top and top["weight_pct"] > 0:
+        impact = top["weight_pct"] * _STRESS_DROP_PCT / 100.0
+        qs.append(
+            f"Nếu {top['symbol']} giảm {_STRESS_DROP_PCT:.0f}%, cả danh mục giảm khoảng "
+            f"{impact:.1f}%. Bạn có chấp nhận được mức đó không?"
+        )
+    sectors = metrics.get("sector_breakdown") or []
+    if sectors and sectors[0]["weight_pct"] > SECTOR_THRESHOLD_PCT:
+        qs.append(
+            f"{sectors[0]['weight_pct']:.0f}% danh mục nằm trong ngành {sectors[0]['sector']}. "
+            f"Bạn biết gì về những rủi ro riêng của ngành này?"
+        )
+    if metrics.get("high_correlation_pairs"):
+        qs.append(
+            "Các mã tương quan cao thường lên xuống cùng lúc. Danh mục của bạn thực sự đang "
+            "đặt cược vào bao nhiêu chủ đề khác nhau?"
+        )
+    qs.append("Bạn đã biết mình sẽ làm gì nếu cả thị trường giảm mạnh trong vài tuần chưa?")
+    return qs[:4]
+
+
+def _base_review(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Phần review không cần AI: quan sát + cảnh báo ngưỡng + câu hỏi.
+
+    Luôn có, kể cả khi thiếu API key — đây mới là phần chính. AI (nếu có) chỉ diễn
+    giải thêm các quan sát này bằng lời.
+    """
     return {
-        "overall_score": score,
-        "risk_level": risk_level,
+        "quan_sat": _observations(metrics),
         "concentration_warning": metrics.get("concentration_flag"),
         "sector_warning": metrics.get("sector_flag"),
         "correlation_warning": metrics.get("correlation_flag"),
-        "recommendation": (
-            f"Danh mục có mức rủi ro {risk_level}. "
-            + ("Cần tái cơ cấu để giảm tập trung." if num_flags >= 1 else "Phân bổ ổn, tiếp tục giữ vị thế.")
-        ),
-        "rebalance_suggestions": suggestions[:5],
-        "source": "heuristic_fallback",
+        "cau_hoi": _questions(metrics),
     }
 
 
@@ -596,7 +646,7 @@ def review_portfolio(api_key: Optional[str] = None) -> Dict[str, Any]:
     Phân tích sức khỏe danh mục THẬT và trả về cảnh báo rủi ro.
 
     Args:
-        api_key: Gemini API key. Nếu None/empty, fallback heuristic rule-based.
+        api_key: Gemini API key. Nếu None/empty, chỉ trả phần tính bằng Python.
 
     Returns:
         Dict: {empty: true} nếu chưa có vị thế, hoặc structured review.
@@ -632,58 +682,53 @@ def review_portfolio(api_key: Optional[str] = None) -> Dict[str, Any]:
 
     active_key = (api_key or os.getenv("GEMINI_API_KEY") or "").strip()
 
-    # Nếu thiếu key hoặc lib → heuristic fallback
+    base = _base_review(metrics)
+
+    # Thiếu key hoặc thư viện: vẫn trả đủ phần tính bằng Python — đó mới là phần chính.
     if not active_key or not HAS_GENAI:
-        result = _heuristic_review(metrics)
-        result["metrics"] = metrics
-        result["portfolio_source"] = source
-        result["cached"] = False
+        result = {**base, "metrics": metrics, "portfolio_source": source, "source": "python", "cached": False}
         _cache.set(cache_key, result, REVIEW_TTL_SECONDS)
         return result
 
-    prompt = _build_review_prompt(metrics)
-
-    try:
-        genai.configure(api_key=active_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"},
-        )
-        text = response.text.strip()
-        parsed = json.loads(text)
-        result = {
-            **parsed,
-            "metrics": metrics,
-            "source": "gemini",
-            "portfolio_source": source,
-            "cached": False,
-        }
-        _cache.set(cache_key, result, REVIEW_TTL_SECONDS)
-        return result
-    except Exception as e_structured:
-        # Retry không có mime hint (đôi khi structured mode reject schema phức tạp)
+    prompt = _build_review_prompt(metrics, base["quan_sat"])
+    parsed = None
+    errors: List[str] = []
+    # Thử structured mode trước, rồi thử lại không có mime hint (đôi khi structured
+    # mode từ chối schema).
+    for use_mime in (True, False):
         try:
             genai.configure(api_key=active_key)
             model = genai.GenerativeModel(GEMINI_MODEL)
-            response = model.generate_content(prompt)
-            parsed = json.loads(_strip_json_fence(response.text))
-            result = {
-                **parsed,
-                "metrics": metrics,
-                "source": "gemini_fallback",
-                "cached": False,
-            }
-            _cache.set(cache_key, result, REVIEW_TTL_SECONDS)
-            return result
-        except Exception as e_plain:
-            # Fallback cuối cùng: heuristic + ghi lỗi
-            err_msg = f"{e_structured} | {e_plain}"
-            result = _heuristic_review(metrics)
-            result["metrics"] = metrics
-            result["source"] = "heuristic_after_gemini_error"
-            result["error"] = str(err_msg)[:300]
-            result["cached"] = False
-            # KHÔNG cache lỗi quá lâu — TTL 60s để retry sớm
-            _cache.set(cache_key, result, 60.0)
-            return result
+            if use_mime:
+                response = model.generate_content(
+                    prompt,
+                    generation_config={"response_mime_type": "application/json"},
+                )
+                parsed = json.loads(response.text.strip())
+            else:
+                response = model.generate_content(prompt)
+                parsed = json.loads(_strip_json_fence(response.text))
+            break
+        except Exception as e:
+            errors.append(str(e))
+
+    result = {**base, "metrics": metrics, "portfolio_source": source, "cached": False}
+    if parsed is None:
+        result["source"] = "python_after_gemini_error"
+        result["error"] = " | ".join(errors)[:300]
+        # KHÔNG cache lỗi quá lâu — TTL 60s để retry sớm
+        _cache.set(cache_key, result, 60.0)
+        return result
+
+    # Chỉ nhận đúng hai trường diễn giải; điểm, mức rủi ro hay "đề xuất" mà mô hình
+    # tự thêm đều bị bỏ, và câu mang tính chỉ dẫn bị lọc.
+    ai_part, removed = clean_fields(
+        parsed if isinstance(parsed, dict) else {}, ("dien_giai",), ("rui_ro_chinh",)
+    )
+    result.update(ai_part)
+    if removed:
+        result["da_loc"] = removed
+        result["ghi_chu_loc"] = FILTER_NOTE
+    result["source"] = "gemini"
+    _cache.set(cache_key, result, REVIEW_TTL_SECONDS)
+    return result

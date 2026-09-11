@@ -1,5 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
-import { Cpu, Send, TrendingUp, ShieldAlert, Award, MessageSquare, BookOpen, Newspaper, AlertTriangle } from 'lucide-react';
+import {
+  Cpu,
+  Send,
+  Activity,
+  TrendingUp,
+  BookOpen,
+  Newspaper,
+  AlertTriangle,
+  MessageSquare,
+  Compass,
+  GitCompare,
+  HelpCircle,
+  ShieldAlert,
+} from 'lucide-react';
 
 const ERROR_LABELS = {
   missing_api_key: 'Chưa cấu hình Gemini API Key.',
@@ -8,6 +21,24 @@ const ERROR_LABELS = {
   network_error: 'Lỗi kết nối tới Gemini. Kiểm tra mạng.',
   api_error: 'Lỗi từ Gemini API. Xem chi tiết bên dưới.',
 };
+
+/**
+ * AI đọc giúp số liệu của mã đang xem.
+ *
+ * Bản cũ có ô "Khuyến nghị: MUA MẠNH", "Độ tin cậy 85%", giá mục tiêu và mức cắt
+ * lỗ. Với người mới, đó chính là lệnh mua bán — mà một mô hình ngôn ngữ đọc vài
+ * chỉ báo không có căn cứ nào đủ chắc để ra lệnh. Bản này chỉ giải thích: dữ liệu
+ * nói gì, chỗ nào mâu thuẫn, rủi ro gì, và câu hỏi người đọc nên tự trả lời.
+ * Backend (verdict_guard) lọc thêm một lớp phòng khi AI không nghe prompt.
+ */
+const TEXT_SECTIONS = [
+  { key: 'tong_quan', label: 'Tổng quan', Icon: Compass },
+  { key: 'ky_thuat', label: 'Chỉ báo kỹ thuật nói gì', Icon: Activity },
+  { key: 'xu_huong', label: 'Xu hướng', Icon: TrendingUp },
+  { key: 'co_ban', label: 'Chỉ số cơ bản nói gì', Icon: BookOpen },
+  { key: 'tin_tuc', label: 'Tin tức', Icon: Newspaper },
+  { key: 'mau_thuan', label: 'Chỗ dữ liệu mâu thuẫn', Icon: GitCompare },
+];
 
 export default function AiAnalyst({ analysisData, isAnalyzing, onRunAnalysis, chatMessages, onSendMessage, isChatting }) {
   const [question, setQuestion] = useState('');
@@ -24,32 +55,21 @@ export default function AiAnalyst({ analysisData, isAnalyzing, onRunAnalysis, ch
     setQuestion('');
   };
 
-  const getRecommendationBadge = (rec) => {
-    switch (rec) {
-      case 'STRONG_BUY':
-        return <span className="badge strong-buy">MUA MẠNH</span>;
-      case 'BUY':
-        return <span className="badge buy">MUA</span>;
-      case 'SELL':
-        return <span className="badge sell">BÁN</span>;
-      case 'STRONG_SELL':
-        return <span className="badge strong-sell">BÁN MẠNH</span>;
-      case 'HOLD':
-      default:
-        return <span className="badge hold">NẮM GIỮ</span>;
-    }
-  };
-
   const analysis = analysisData?.analysis || {};
+  const risks = Array.isArray(analysis.rui_ro) ? analysis.rui_ro : [];
+  const questions = Array.isArray(analysis.cau_hoi_tu_hoi) ? analysis.cau_hoi_tu_hoi : [];
+  const sections = TEXT_SECTIONS.filter((s) => analysis[s.key]);
+  // Lỗi (thiếu key, hết hạn ngạch...) đã có banner riêng; không lặp lại thành một "đoạn giải thích".
+  const hasContent = !analysis.error && (sections.length > 0 || risks.length > 0 || questions.length > 0);
 
   return (
     <div className="glass-panel column-ai">
       <div className="panel-header">
         <div className="panel-title">
           <Cpu className="logo-icon" size={18} />
-          <span>AI Analyst Brain</span>
+          <span>AI giải thích</span>
         </div>
-        <button 
+        <button
           className={`btn btn-primary btn-sm ${isAnalyzing ? 'disabled' : ''}`}
           onClick={onRunAnalysis}
           disabled={isAnalyzing}
@@ -57,14 +77,13 @@ export default function AiAnalyst({ analysisData, isAnalyzing, onRunAnalysis, ch
         >
           {isAnalyzing ? (
             <div className="loading-dots" style={{ display: 'inline-block' }}>
-              Đang phân tích<span>.</span><span>.</span><span>.</span>
+              Đang đọc số liệu<span>.</span><span>.</span><span>.</span>
             </div>
-          ) : 'Phân tích AI'}
+          ) : 'Giải thích mã này'}
         </button>
       </div>
 
       <div className="panel-content ai-scrollable">
-        {/* AI Error Banner */}
         {analysis.error ? (
           <div className="ai-error-banner">
             <AlertTriangle size={14} />
@@ -74,85 +93,73 @@ export default function AiAnalyst({ analysisData, isAnalyzing, onRunAnalysis, ch
             </div>
           </div>
         ) : null}
-        {/* Recommendation Panel */}
-        <div className="ai-report-card">
-          {analysisData ? (
-            <div className="ai-metrics-grid">
-              <div className="ai-metric-box main-badge-box">
-                <span className="metric-label">Khuyến Nghị</span>
-                <span className="metric-value">{getRecommendationBadge(analysis.recommendation)}</span>
-              </div>
-              <div className="ai-metric-box">
-                <span className="metric-label">Độ Tin Cậy</span>
-                <span className="metric-value font-display text-accent" style={{ fontSize: '20px', fontWeight: 'bold' }}>
-                  {analysis.confidence || 0}%
-                </span>
-              </div>
-              <div className="ai-metric-box">
-                <span className="metric-label">Mục Tiêu</span>
-                <span className="metric-value text-buy" style={{ fontSize: '15px', fontWeight: '600' }}>
-                  {analysis.target_price ? Number(analysis.target_price).toLocaleString() : 'N/A'}
-                </span>
-              </div>
-              <div className="ai-metric-box">
-                <span className="metric-label">Cắt Lỗ</span>
-                <span className="metric-value text-sell" style={{ fontSize: '15px', fontWeight: '600' }}>
-                  {analysis.stop_loss ? Number(analysis.stop_loss).toLocaleString() : 'N/A'}
-                </span>
-              </div>
-            </div>
-          ) : (
-            <div className="empty-ai-state">
-              Bấm nút "Phân tích AI" để nhận tín hiệu đầu tư và định giá cổ phiếu.
-            </div>
-          )}
-        </div>
 
-        {analysisData && (
-          <div className="ai-details-section">
-            <div className="ai-detail-block">
-              <div className="block-title"><Award size={14} className="text-accent" /> Tóm tắt đánh giá</div>
-              <p className="block-text">{analysis.summary}</p>
-            </div>
-            <div className="ai-detail-block">
-              <div className="block-title"><TrendingUp size={14} className="text-buy" /> Phân tích kỹ thuật</div>
-              <p className="block-text">{analysis.technical_analysis}</p>
-            </div>
-            {analysis.fundamental_analysis && (
-              <div className="ai-detail-block">
-                <div className="block-title"><BookOpen size={14} className="text-accent" /> Phân tích cơ bản</div>
-                <p className="block-text">{analysis.fundamental_analysis}</p>
-              </div>
-            )}
-            {analysis.news_sentiment && (
-              <div className="ai-detail-block">
-                <div className="block-title"><Newspaper size={14} className="text-accent" /> Bối cảnh tin tức</div>
-                <p className="block-text">{analysis.news_sentiment}</p>
-              </div>
-            )}
-            {analysis.trend_analysis && (
-              <div className="ai-detail-block">
-                <div className="block-title"><TrendingUp size={14} className="text-accent" /> Xu hướng</div>
-                <p className="block-text">{analysis.trend_analysis}</p>
-              </div>
-            )}
-            <div className="ai-detail-block">
-              <div className="block-title"><ShieldAlert size={14} className="text-sell" /> Kế hoạch hành động</div>
-              <p className="block-text">{analysis.action_plan}</p>
-            </div>
+        {!analysisData ? (
+          <div className="empty-ai-state">
+            Bấm "Giải thích mã này" để AI đọc giúp chỉ báo kỹ thuật, chỉ số cơ bản và tin tức
+            của mã đang xem bằng tiếng Việt dễ hiểu.
+            <span className="ai-promise">
+              AI không khuyên mua hay bán, không chấm điểm, không đưa giá mục tiêu.
+            </span>
           </div>
-        )}
+        ) : null}
+
+        {hasContent ? (
+          <div className="ai-details-section">
+            {sections.map(({ key, label, Icon }) => (
+              <div key={key} className="ai-detail-block">
+                <div className="block-title">
+                  <Icon size={14} className="text-accent" /> {label}
+                </div>
+                <p className="block-text">{analysis[key]}</p>
+              </div>
+            ))}
+
+            {risks.length > 0 ? (
+              <div className="ai-detail-block">
+                <div className="block-title">
+                  <ShieldAlert size={14} className="text-sell" /> Rủi ro cần biết
+                </div>
+                <ul className="ai-list">
+                  {risks.map((text, i) => (
+                    <li key={i}>{text}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {questions.length > 0 ? (
+              <div className="ai-detail-block">
+                <div className="block-title">
+                  <HelpCircle size={14} className="text-accent" /> Câu hỏi để bạn tự trả lời
+                </div>
+                <ul className="ai-list">
+                  {questions.map((text, i) => (
+                    <li key={i}>{text}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {analysis.ghi_chu_loc ? <p className="ai-filter-note">{analysis.ghi_chu_loc}</p> : null}
+            <p className="ai-disclaimer">
+              Phần diễn giải do AI viết từ số liệu và có thể sai. Không phải khuyến nghị đầu tư —
+              quyết định là của bạn.
+            </p>
+          </div>
+        ) : null}
 
         {/* AI Chatbox */}
         <div className="chatbox-container">
           <div className="chatbox-header">
             <MessageSquare size={14} />
-            <span>Thảo luận cùng AI</span>
+            <span>Hỏi AI về số liệu</span>
           </div>
-          
+
           <div className="chatbox-messages">
             <div className="message ai">
-              Xin chào! Hãy hỏi tôi bất kỳ điều gì về cổ phiếu này (Ví dụ: "Có nên mua đuổi không?", "Các ngưỡng cản mạnh tiếp theo ở đâu?").
+              Xin chào! Hỏi tôi về số liệu của mã này, ví dụ: "RSI 70 nghĩa là gì?" hay "Vì sao
+              P/E cao hơn ngành?". Tôi giải thích, không khuyên mua hay bán.
             </div>
             {chatMessages.map((msg, i) => (
               <div key={i} className={`message ${msg.role}`}>
@@ -213,88 +220,25 @@ export default function AiAnalyst({ analysisData, isAnalyzing, onRunAnalysis, ch
           font-family: ui-monospace, monospace;
           word-break: break-all;
         }
-        .ai-report-card {
-          background: rgba(255, 255, 255, 0.02);
-          border: 1px solid var(--border-color);
-          border-radius: 12px;
-          padding: 12px;
-        }
         .empty-ai-state {
           text-align: center;
           color: var(--text-muted);
           font-size: 13px;
           padding: 20px 10px;
           line-height: 1.5;
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid var(--border-color);
+          border-radius: 12px;
         }
-        .ai-metrics-grid {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 10px;
+        .ai-promise {
+          display: block;
+          margin-top: 8px;
+          font-size: 11px;
+          opacity: 0.85;
         }
-        .ai-metric-box {
-          background: rgba(0, 0, 0, 0.2);
-          border: 1px solid rgba(255, 255, 255, 0.04);
-          border-radius: 8px;
-          padding: 10px;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-          gap: 4px;
-        }
-        .main-badge-box {
-          grid-column: span 2;
-          padding: 14px;
-        }
-        .metric-label {
-          font-size: 10px;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-        }
-        .metric-value {
-          font-size: 14px;
-          font-weight: 500;
-        }
-        .badge {
-          padding: 4px 10px;
-          border-radius: 6px;
-          font-family: var(--font-display);
-          font-weight: 700;
-          font-size: 12px;
-          letter-spacing: 0.5px;
-        }
-        .badge.strong-buy {
-          background: rgba(16, 185, 129, 0.2);
-          color: var(--color-buy);
-          border: 1px solid var(--color-buy);
-          box-shadow: 0 0 10px rgba(16, 185, 129, 0.1);
-        }
-        .badge.buy {
-          background: rgba(16, 185, 129, 0.1);
-          color: var(--color-buy);
-          border: 1px solid rgba(16, 185, 129, 0.5);
-        }
-        .badge.sell {
-          background: rgba(244, 63, 94, 0.1);
-          color: var(--color-sell);
-          border: 1px solid rgba(244, 63, 94, 0.5);
-        }
-        .badge.strong-sell {
-          background: rgba(244, 63, 94, 0.2);
-          color: var(--color-sell);
-          border: 1px solid var(--color-sell);
-          box-shadow: 0 0 10px rgba(244, 63, 94, 0.1);
-        }
-        .badge.hold {
-          background: rgba(245, 158, 11, 0.15);
-          color: var(--color-hold);
-          border: 1px solid var(--color-hold);
-        }
-        .text-buy { color: var(--color-buy); }
         .text-sell { color: var(--color-sell); }
         .text-accent { color: var(--color-accent); }
-        
+
         .ai-details-section {
           display: flex;
           flex-direction: column;
@@ -322,7 +266,26 @@ export default function AiAnalyst({ analysisData, isAnalyzing, onRunAnalysis, ch
           color: var(--text-secondary);
           line-height: 1.6;
         }
-        
+        .ai-list {
+          margin: 0;
+          padding-left: 18px;
+          font-size: 12px;
+          color: var(--text-secondary);
+          line-height: 1.6;
+        }
+        .ai-filter-note {
+          margin: 0;
+          font-size: 10.5px;
+          line-height: 1.5;
+          color: var(--color-hold, #f59e0b);
+        }
+        .ai-disclaimer {
+          margin: 0;
+          font-size: 10px;
+          line-height: 1.5;
+          color: var(--text-muted);
+        }
+
         /* Chatbox */
         .chatbox-container {
           background: rgba(0, 0, 0, 0.3);
@@ -360,6 +323,7 @@ export default function AiAnalyst({ analysisData, isAnalyzing, onRunAnalysis, ch
           font-size: 11px;
           line-height: 1.4;
           word-break: break-word;
+          white-space: pre-line;
         }
         .message.ai {
           background: rgba(255, 255, 255, 0.05);

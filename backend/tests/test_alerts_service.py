@@ -45,8 +45,8 @@ class TestCreateAlert:
             alerts.create_alert("FPT", "price_above", "tám mươi nghìn")
 
     def test_threshold_none_thanh_0(self, alerts):
-        # ai_signal_change không dùng threshold nên None là hợp lệ.
-        assert alerts.create_alert("FPT", "ai_signal_change", None)["threshold"] == 0.0
+        # news_new không dùng threshold nên None là hợp lệ.
+        assert alerts.create_alert("FPT", "news_new", None)["threshold"] == 0.0
 
 
 class TestListAndDelete:
@@ -97,29 +97,6 @@ class TestMarkTriggered:
         alerts.mark_triggered("khong-co-that")  # không được raise
 
 
-class TestAiSignalChange:
-    def test_lan_dau_luu_khong_tinh_la_doi(self, alerts):
-        result = alerts.update_ai_signal("FPT", "BUY")
-        assert result["changed"] is False
-        assert result["previous"] is None
-        assert result["current"] == "BUY"
-
-    def test_doi_khuyen_nghi_thi_bao_changed(self, alerts):
-        alerts.update_ai_signal("FPT", "BUY")
-        result = alerts.update_ai_signal("FPT", "SELL")
-        assert result["changed"] is True
-        assert result["previous"] == "BUY"
-        assert result["current"] == "SELL"
-
-    def test_khuyen_nghi_giong_het_thi_khong_doi(self, alerts):
-        alerts.update_ai_signal("FPT", "BUY")
-        assert alerts.update_ai_signal("FPT", "buy")["changed"] is False
-
-    def test_input_rong_khong_ghi_gi(self, alerts):
-        assert alerts.update_ai_signal("", "BUY")["changed"] is False
-        assert alerts.update_ai_signal("FPT", "")["changed"] is False
-
-
 class TestCheckAlerts:
     def test_khong_co_rule_thi_tra_rong(self, alerts):
         assert alerts.check_alerts() == []
@@ -159,47 +136,6 @@ class TestCheckAlerts:
         )
         assert alerts.check_alerts() == []
         assert alerts.list_alerts()[0]["active"] is True
-
-
-class TestAiSignalChangeAlert:
-    """
-    Rule "AI đổi tín hiệu" phải bắn được qua HAI request khác nhau: /analyze phát
-    hiện đổi chiều, /alerts/check chạy sau đó mới đánh giá. Trạng thái vì thế phải
-    nằm ở DB, không phải biến in-process.
-    """
-
-    def test_chua_co_tin_hieu_nao_thi_khong_bắn(self, alerts):
-        alerts.create_alert("FPT", "ai_signal_change", 0)
-        assert alerts.check_alerts() == []
-
-    def test_tin_hieu_dau_tien_khong_tinh_la_doi(self, alerts):
-        alerts.create_alert("FPT", "ai_signal_change", 0)
-        alerts.update_ai_signal("FPT", "BUY")
-        assert alerts.check_alerts() == []
-
-    def test_doi_tin_hieu_thi_bắn_o_lan_check_ke_tiep(self, alerts):
-        alerts.create_alert("FPT", "ai_signal_change", 0)
-        alerts.update_ai_signal("FPT", "BUY")
-        alerts.update_ai_signal("FPT", "SELL")
-
-        triggered = alerts.check_alerts()
-        assert [t["symbol"] for t in triggered] == ["FPT"]
-
-    def test_pending_duoc_xoa_sau_khi_xu_ly(self, alerts):
-        alerts.create_alert("FPT", "ai_signal_change", 0)
-        alerts.update_ai_signal("FPT", "BUY")
-        alerts.update_ai_signal("FPT", "SELL")
-        alerts.check_alerts()
-
-        # Rule mới cho cùng mã không được ăn theo lần đổi tín hiệu đã xử lý.
-        alerts.create_alert("FPT", "ai_signal_change", 0)
-        assert alerts.check_alerts() == []
-
-    def test_ma_khac_khong_bi_bắn_lay(self, alerts):
-        alerts.create_alert("HPG", "ai_signal_change", 0)
-        alerts.update_ai_signal("FPT", "BUY")
-        alerts.update_ai_signal("FPT", "SELL")
-        assert alerts.check_alerts() == []
 
 
 class TestNewsAlert:
@@ -281,3 +217,34 @@ class TestParsePublishedAt:
         assert alerts._parse_published_at("hom qua") is None
         assert alerts._parse_published_at(None) is None
         assert alerts._parse_published_at("") is None
+
+
+class TestDieuKienDaGo:
+    """
+    "AI đổi tín hiệu" đã bị gỡ cùng nhãn MUA/BÁN của AI. Không tạo mới được, và rule
+    cũ còn nằm trong DB của người dùng không được làm hỏng lượt kiểm tra.
+    """
+
+    def test_khong_tao_duoc_ai_signal_change(self, alerts):
+        with pytest.raises(ValueError):
+            alerts.create_alert("FPT", "ai_signal_change", 0)
+
+    def test_rule_cu_trong_db_bi_bo_qua(self, alerts, monkeypatch):
+        import time
+        import uuid
+
+        import storage_service
+
+        storage_service.insert_alert_rule(
+            {
+                "id": str(uuid.uuid4()),
+                "symbol": "FPT",
+                "condition": "ai_signal_change",
+                "threshold": 0.0,
+                "created_at": int(time.time()),
+                "triggered_at": None,
+                "active": True,
+            }
+        )
+        monkeypatch.setattr(alerts, "_fetch_symbol_snapshot", lambda symbol: {"symbol": symbol})
+        assert alerts.check_alerts() == []

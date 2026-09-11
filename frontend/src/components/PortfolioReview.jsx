@@ -1,41 +1,17 @@
 import { useEffect, useState } from 'react';
 import {
   X,
-  Shield,
   AlertTriangle,
-  TrendingUp,
   Sparkles,
   PieChart,
   Activity,
   Layers,
   Briefcase,
-  Lightbulb,
   Loader2,
+  Eye,
+  HelpCircle,
 } from 'lucide-react';
 import useModalDismiss from '../hooks/useModalDismiss';
-
-const scoreTone = (score) => {
-  if (score === null || score === undefined) return '';
-  if (score >= 70) return 'good';
-  if (score >= 40) return 'neutral';
-  return 'bad';
-};
-
-const riskTone = (level) => {
-  const v = (level || '').toUpperCase();
-  if (v === 'LOW') return 'good';
-  if (v === 'MEDIUM') return 'neutral';
-  if (v === 'HIGH') return 'bad';
-  return '';
-};
-
-const riskLabel = (level) => {
-  const v = (level || '').toUpperCase();
-  if (v === 'LOW') return 'Rủi ro thấp';
-  if (v === 'MEDIUM') return 'Rủi ro trung bình';
-  if (v === 'HIGH') return 'Rủi ro cao';
-  return level || 'N/A';
-};
 
 const WARNING_META = {
   concentration: { icon: PieChart, label: 'Tập trung danh mục' },
@@ -92,9 +68,6 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
 
   if (!open) return null;
 
-  const score = review?.overall_score;
-  const sTone = scoreTone(score);
-  const rTone = riskTone(review?.risk_level);
   // Backend trả cảnh báo dưới dạng field phẳng `<key>_warning` (chuỗi mô tả hoặc
   // null), không phải object `warnings` lồng nhau — đọc sai thì panel Cảnh báo
   // không bao giờ hiện dù danh mục có tập trung quá mức.
@@ -109,7 +82,9 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
     if (typeof w === 'object') return w.triggered || w.severity || w.message;
     return Boolean(w);
   });
-  const rebalance = review?.rebalance_suggestions || review?.suggestions || [];
+  const observations = review?.quan_sat || [];
+  const risks = review?.rui_ro_chinh || [];
+  const questions = review?.cau_hoi || [];
 
   return (
     <div className="pr-backdrop" onClick={onClose}>
@@ -130,7 +105,7 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
         {loading && (
           <div className="pr-state">
             <Loader2 size={28} className="pr-spinner" />
-            <div className="pr-state-title">AI đang phân tích danh mục của bạn</div>
+            <div className="pr-state-title">Đang tính toán danh mục của bạn</div>
             <div className="pr-state-sub">Đang đánh giá tập trung, ngành nghề, tương quan...</div>
           </div>
         )}
@@ -146,30 +121,25 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
             <Briefcase size={28} className="pr-empty-icon" />
             <div className="pr-state-title">Danh mục trống</div>
             <div className="pr-state-sub">
-              Bạn chưa nắm giữ cổ phiếu nào — mua mã trước rồi xem review.
+              Chưa có vị thế nào — nhập sao kê giao dịch ở panel Danh mục thật trước.
             </div>
           </div>
         )}
 
         {!loading && !error && review && (
           <div className="pr-body">
-            <div className="pr-summary">
-              <div className={`pr-score pr-score-${sTone}`}>
-                <span className="pr-score-label">Điểm tổng</span>
-                <span className="pr-score-value">
-                  {score === null || score === undefined ? 'N/A' : Math.round(score)}
-                </span>
-                <span className="pr-score-max">/ 100</span>
+            {observations.length > 0 && (
+              <div className="pr-section">
+                <div className="pr-section-title">
+                  <Eye size={13} /> Quan sát từ số liệu
+                </div>
+                <ul className="pr-rebalance">
+                  {observations.map((text, i) => (
+                    <li key={i} className="pr-rebalance-item">{text}</li>
+                  ))}
+                </ul>
               </div>
-              <div className="pr-risk">
-                <span className="pr-risk-label">
-                  <Shield size={12} /> Mức rủi ro
-                </span>
-                <span className={`pr-risk-badge pr-risk-${rTone}`}>
-                  {riskLabel(review.risk_level)}
-                </span>
-              </div>
-            </div>
+            )}
 
             {activeWarnings.length > 0 && (
               <div className="pr-section">
@@ -209,29 +179,46 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
               </div>
             )}
 
-            {review.recommendation && (
+            {review.dien_giai && (
               <div className="pr-section">
                 <div className="pr-section-title">
-                  <Lightbulb size={13} /> Khuyến nghị
+                  <Sparkles size={13} /> AI diễn giải
                 </div>
-                <div className="pr-recommendation">{review.recommendation}</div>
+                <div className="pr-recommendation">{review.dien_giai}</div>
               </div>
             )}
 
-            {rebalance.length > 0 && (
+            {risks.length > 0 && (
               <div className="pr-section">
                 <div className="pr-section-title">
-                  <TrendingUp size={13} /> Đề xuất tái cân bằng
+                  <AlertTriangle size={13} /> Rủi ro chính
                 </div>
                 <ul className="pr-rebalance">
-                  {rebalance.map((s, i) => (
-                    <li key={i} className="pr-rebalance-item">
-                      {typeof s === 'string' ? s : (s.text || s.message || s.action || JSON.stringify(s))}
-                    </li>
+                  {risks.map((text, i) => (
+                    <li key={i} className="pr-rebalance-item">{text}</li>
                   ))}
                 </ul>
               </div>
             )}
+
+            {questions.length > 0 && (
+              <div className="pr-section">
+                <div className="pr-section-title">
+                  <HelpCircle size={13} /> Câu hỏi để bạn tự trả lời
+                </div>
+                <ul className="pr-rebalance">
+                  {questions.map((text, i) => (
+                    <li key={i} className="pr-rebalance-item">{text}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {review.ghi_chu_loc && <div className="pr-filter-note">{review.ghi_chu_loc}</div>}
+            <div className="pr-disclaimer">
+              Phần này mô tả danh mục bằng số liệu, không phải lời khuyên mua bán. Quyết định là
+              của bạn.
+            </div>
           </div>
         )}
       </div>
@@ -464,6 +451,18 @@ export default function PortfolioReview({ apiBase, apiKey, open, onClose }) {
           font-weight: 700;
         }
 
+        .pr-filter-note {
+          font-size: 11px;
+          line-height: 1.5;
+          color: var(--color-hold, #f59e0b);
+        }
+        .pr-disclaimer {
+          font-size: 10.5px;
+          line-height: 1.5;
+          color: var(--text-muted);
+          border-top: 1px dashed var(--border-color);
+          padding-top: 10px;
+        }
         .pr-recommendation {
           background: rgba(6,182,212,0.06);
           border: 1px solid rgba(6,182,212,0.2);
