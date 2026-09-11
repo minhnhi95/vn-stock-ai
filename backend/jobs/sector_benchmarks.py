@@ -94,30 +94,45 @@ def _sector_map() -> Dict[str, str]:
     return mapping
 
 
-def _liquidity_rank(symbols: List[str]) -> Dict[str, float]:
+def _liquidity_rank(
+    symbols: List[str], retries: int = 3, pause: float = 3.0
+) -> Optional[Dict[str, float]]:
     """
     Giá trị khớp lệnh phiên gần nhất của từng mã, dùng để xếp hạng.
 
     price_board nhận nhiều mã trong MỘT request nên xếp hạng cả ngành chỉ tốn
     1-2 request — rẻ hơn nhiều so với gọi lịch sử giá từng mã.
+
+    Trả None khi có lô vẫn trống sau khi thử lại. Phải tách bạch "không xếp
+    hạng được" với "mã không có giao dịch": fetch_price_board nuốt lỗi rate limit
+    và trả dict rỗng, và bản đầu của job coi dict rỗng là "mọi mã thanh khoản
+    bằng 0" rồi lấp chỗ trống theo thứ tự ABC. Ngành Hàng cá nhân & Gia dụng vì
+    thế được đại diện bởi A32, AAT, ADS, BBT... thay vì PNJ, TCM, TNG.
     """
     try:
         from foreign_service import fetch_price_board
     except Exception:
-        return {}
+        return None
 
     out: Dict[str, float] = {}
     # price_board bắt đầu trả thiếu khi danh sách quá dài, nên chia lô.
     for i in range(0, len(symbols), 80):
-        # Xếp hạng cả 19 ngành tốn khoảng 24 lô liên tiếp — vẫn phải nghỉ, nếu
-        # không là dùng hết hạn mức 20 request/phút trước khi kịp lấy chỉ số.
-        if i:
-            time.sleep(3.0)
-        try:
-            board = fetch_price_board(symbols[i : i + 80])
-        except Exception:
-            continue
-        for symbol, row in (board or {}).items():
+        batch = symbols[i : i + 80]
+        board: Dict[str, Any] = {}
+        for attempt in range(retries):
+            # Nghỉ trước MỌI lần gọi, kể cả lô đầu của mỗi ngành. Bản trước chỉ
+            # nghỉ giữa các lô trong cùng một ngành, nên đầu mỗi ngành bắn liền
+            # nhau và dính hạn mức 20 request/phút. Lần thử lại nghỉ lâu dần.
+            time.sleep(pause * (attempt + 1))
+            try:
+                board = fetch_price_board(batch) or {}
+            except Exception:
+                board = {}
+            if board:
+                break
+        if not board:
+            return None
+        for symbol, row in board.items():
             price = row.get("price") or 0
             volume = row.get("total_volume") or 0
             out[symbol] = float(price) * float(volume)
@@ -136,23 +151,43 @@ def pick_universe(per_sector: int, core: List[str]) -> List[str]:
     Vì sao xếp theo thanh khoản chứ không lấy bừa: trung vị dựng từ 12 mã penny
     trong ngành Xây dựng không mô tả ngành xây dựng mà người dùng đang cân nhắc
     mua. Ưu tiên mã giao dịch nhiều = ưu tiên phần thị trường thật sự đầu tư được.
+
+    Hai trường hợp KHÔNG được lấp chỗ trống theo thứ tự ABC:
+      - mã không khớp lệnh nào: loại hẳn, không xếp cuối;
+      - ngành mà price_board không trả được dù đã thử lại: chỉ giữ mã VN100.
+    Ngành vì thế có thể rớt khỏi bảng do không đủ mẫu — đúng như mong muốn.
     """
     core_set = {s for s in core if is_vn_symbol(s)}
     chosen: List[str] = []
     seen = set()
+    unranked: List[str] = []
 
     for industry in get_industries():
         members = [s for s in (industry.get("symbols") or []) if is_vn_symbol(s)]
         if not members:
             continue
         ranks = _liquidity_rank(members)
-        # Mã trong rổ chính (VN100) luôn được ưu tiên; phần còn lại xếp theo giá
-        # trị khớp lệnh, mã không có số liệu xuống cuối.
-        members.sort(key=lambda s: (s not in core_set, -ranks.get(s, 0.0), s))
-        for symbol in members[:per_sector]:
+        if ranks is None:
+            unranked.append(industry["name"])
+            picked = [s for s in members if s in core_set][:per_sector]
+            note = "KHONG xep hang duoc, chi dung ma VN100"
+        else:
+            candidates = [s for s in members if s in core_set or ranks.get(s, 0.0) > 0]
+            candidates.sort(key=lambda s: (s not in core_set, -ranks.get(s, 0.0), s))
+            picked = candidates[:per_sector]
+            traded = sum(1 for v in ranks.values() if v > 0)
+            note = f"co giao dich {traded}/{len(members)}"
+        print(f"  {industry['name']}: chon {len(picked)} ma ({note})")
+        for symbol in picked:
             if symbol not in seen:
                 seen.add(symbol)
                 chosen.append(symbol)
+
+    if unranked:
+        print(
+            f"CANH BAO: khong xep hang thanh khoan duoc {len(unranked)} nganh "
+            f"({', '.join(unranked)}) - cac nganh nay chi dung ma VN100."
+        )
 
     # Giữ lại toàn bộ rổ chính kể cả khi mã đó không lọt top ngành — đó là những
     # mã người dùng tra cứu nhiều nhất.

@@ -178,6 +178,15 @@ Start-ScheduledTask   -TaskName "VN Stock - Trung vi nganh"   # chạy ngay
 Unregister-ScheduledTask -TaskName "VN Stock - Trung vi nganh" -Confirm:$false
 ```
 
+`Stop-ScheduledTask` chỉ dừng `cmd.exe` — tiến trình Python đang quét **vẫn chạy tiếp**
+và ghi bảng khi xong. Muốn dừng hẳn:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object CommandLine -match 'sector_benchmarks' |
+  ForEach-Object { Stop-Process -Id $_.ProcessId }
+```
+
 Task truyền tham số `auto` cho file .bat. Bắt buộc phải có: khi chạy tay mà job lỗi,
 .bat dừng màn hình để đọc thông báo, nhưng dưới Task Scheduler thì `pause` sẽ treo vô
 hạn trong một cửa sổ cmd ẩn và lần chạy tuần sau bị bỏ qua vì task cũ chưa kết thúc.
@@ -193,7 +202,10 @@ Vài lựa chọn có chủ đích:
   trung bình cả ngành.
 - **Chọn theo thanh khoản, không lấy bừa.** Ngành Xây dựng có 396 mã niêm yết; trung vị
   dựng từ 12 mã penny không mô tả phần thị trường mà người dùng thật sự mua được.
-  `price_board` xếp hạng cả ngành trong một request.
+  `price_board` xếp hạng cả ngành trong một request. Mã không khớp lệnh nào bị loại hẳn,
+  và ngành nào `price_board` vẫn không trả được sau khi thử lại thì chỉ dùng mã VN100
+  (job in `CANH BAO`) — không bao giờ lấp chỗ trống theo thứ tự ABC. Bảng đầu tiên dính
+  đúng lỗi này: ngành Hàng cá nhân & Gia dụng thành A32, AAT, ADS, BBT… thay vì PNJ.
 - **Ngành dưới 5 mã có số liệu thì không ghi.** Thà không so còn hơn so với trung vị
   dựng từ 2 mã. UI khi đó chỉ hiện phần giải thích, bỏ phần đối chiếu.
 - **Bỏ mã có số liệu quá cũ.** Nhiều mã nhỏ ngừng công bố từ 2019-2020 nhưng nguồn vẫn
