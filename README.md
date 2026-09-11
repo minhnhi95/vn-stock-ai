@@ -42,12 +42,13 @@ npm install
 npm run dev                              # http://localhost:5273
 ```
 
-Trên Windows có thể chạy cả hai bằng `start_servers.bat`.
+Trên Windows có thể chạy cả hai bằng `.\start_servers.bat`. Trong PowerShell phải có
+`.\` ở đầu — PowerShell không chạy file ở thư mục hiện tại nếu thiếu nó.
 
 ### Mở trên điện thoại
 
-```bash
-start_servers.bat lan
+```powershell
+.\start_servers.bat lan
 ```
 
 Rồi mở trên điện thoại cùng mạng địa chỉ mà script in ra, dạng `http://<IPv4>:5273`.
@@ -64,8 +65,8 @@ hotspot của chính bạn, không dùng ở Wi-Fi công cộng.
 
 Dùng Tailscale — máy này và điện thoại đã ở chung một mạng Tailscale:
 
-```bash
-start_servers.bat tailscale
+```powershell
+.\start_servers.bat tailscale
 ```
 
 Bật app Tailscale trên điện thoại, rồi mở địa chỉ script in ra, dạng
