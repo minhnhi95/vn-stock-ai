@@ -13,6 +13,7 @@ import useModalDismiss from './hooks/useModalDismiss';
 import MarketPanel from './components/MarketPanel';
 import DailyBrief from './components/DailyBrief';
 import SafetyCheck from './components/SafetyCheck';
+import VerdictCard from './components/VerdictCard';
 const SafetyScreenModal = lazy(() => import('./components/SafetyScreenModal'));
 import AlertsManager from './components/AlertsManager';
 import CalendarPanel from './components/CalendarPanel';
@@ -508,6 +509,12 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="panel-slot" data-tab="stock">
+            <ErrorBoundary name="Kết luận">
+              <VerdictCard apiBase={API_BASE} symbol={selectedStock.symbol} />
+            </ErrorBoundary>
           </div>
 
           <div className="panel-slot" data-tab="stock">

@@ -12,13 +12,17 @@ Nguyên tắc thiết kế, áp dụng ở mọi tính năng:
 
 1. **Python tính mọi con số, AI chỉ diễn đạt lại.** Khi kết quả sai, biết ngay là
    sai ở tầng dữ liệu hay tầng ngôn ngữ.
-2. **Giải thích, không phán quyết.** App không có điểm 0-100, không có nhãn
-   MUA/BÁN, không có "độ tin cậy 85%". Người mới nhìn một con số tổng hợp sẽ tin
-   nó, mà không có căn cứ nào đủ chắc để đưa ra con số đó.
+2. **Kết luận từ quy tắc, không từ AI.** App đưa kết luận "Có thể cân nhắc mua / Chờ
+   thêm / Không nên mua", nhưng tính bằng quy tắc Python công khai (`verdict_engine.py`),
+   kèm từng tiêu chí đạt/trượt và tỷ lệ quy tắc từng đúng trong quá khứ với chính mã
+   đó — so với tỷ lệ của mọi phiên, để thấy quy tắc có thêm được gì không. AI chỉ diễn
+   giải số liệu; câu khuyên mua/bán do AI tự viết bị lọc (`verdict_guard.py`), vì không
+   ai kiểm chứng được nó.
 3. **Thiếu dữ liệu KHÁC với an toàn.** Mọi chỗ không đủ số liệu đều hiện "thiếu
    dữ liệu", không âm thầm tính là "đạt".
 
-> ⚠️ Đây không phải lời khuyên đầu tư và app không đặt lệnh. Mọi quyết định mua
+> ⚠️ Kết luận của app đến từ quy tắc cố định và có thể sai. Đây không phải lời khuyên
+> của chuyên gia tư vấn đầu tư có giấy phép, và app không đặt lệnh. Mọi quyết định mua
 > bán là của bạn.
 
 ---
@@ -149,6 +153,7 @@ cd frontend && npm run lint
 | Nhóm | Mô tả |
 | --- | --- |
 | Biểu đồ | 3 khung đồng bộ: nến + EMA20/50/200 + khối lượng, RSI(14) có mốc 30/70, MACD; crosshair chung, ô đọc OHLC theo con trỏ; giá cập nhật 5s trong phiên |
+| **Kết luận mua / không mua** | "Có thể cân nhắc mua / Chờ thêm / Không nên mua" cho mã đang xem, từ quy tắc công khai: an toàn, xu hướng (EMA50/EMA200, RSI), định giá và sinh lời so với ngành. Kèm từng tiêu chí đạt/trượt và tỷ lệ quy tắc từng đúng 20 phiên sau trong 2 năm qua, so với mọi phiên |
 | **Kiểm tra an toàn** | 6 tiêu chí ngưỡng cứng (thanh khoản, thị giá, nợ/vốn chủ, ROE, biên độ, rổ VN100). Chỉ chặn mã rủi ro, **không** gợi ý mã tốt. Quét được nhiều mã một lượt |
 | **Cơ bản có giải thích** | 13 chỉ số, mỗi chỉ số kèm một câu tiếng Việt đời thường ("Bạn trả 15,53 đồng để mua 1 đồng lợi nhuận mỗi năm"), trung vị cùng ngành để đối chiếu, và trường hợp con số đó đánh lừa |
 | Tin tức | Tin theo mã + tìm kiếm ngữ nghĩa |
@@ -318,6 +323,7 @@ backend/
   verdict_guard.py            # lọc câu mang tính chỉ dẫn mua/bán khỏi mọi văn bản AI
   storage_service.py          # cảnh báo + giao dịch thật + bản tin (SQLite / Postgres)
   safety_screen.py            # 6 tiêu chí ngưỡng cứng chặn mã rủi ro cho người mới
+  verdict_engine.py           # kết luận mua/chờ/không mua từ quy tắc + tỷ lệ đúng quá khứ
   metric_explainer.py         # dịch chỉ số cơ bản sang tiếng Việt + so trung vị ngành
   market_universe.py          # rổ VN30/VN100 tĩnh làm fallback
   symbol_utils.py             # nhận dạng mã CK VN (nguồn sự thật duy nhất)

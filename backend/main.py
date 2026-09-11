@@ -62,6 +62,15 @@ except Exception as _e:
     print(f"[phase3] safety_screen unavailable: {_e}")
     _SAFETY_OK = False
 
+# Import có chặn lỗi như các module khác: thiếu hay hỏng thì chỉ mất route kết luận,
+# không làm sập cả backend.
+try:
+    from verdict_engine import verdict_for
+    _VERDICT_OK = True
+except Exception as _e:
+    print(f"[verdict] verdict_engine unavailable: {_e}")
+    _VERDICT_OK = False
+
 try:
     from alerts_service import (
         create_alert,
@@ -207,6 +216,7 @@ def health():
             "search": _SEARCH_OK,
             "real_portfolio": _REAL_OK,
             "safety_screen": _SAFETY_OK,
+            "verdict": _VERDICT_OK,
         },
     }
 
@@ -858,6 +868,19 @@ if _REAL_OK:
 
 class SafetyScreenRequest(BaseModel):
     symbols: Optional[List[str]] = None
+
+
+if _VERDICT_OK:
+    @app.get("/api/verdict")
+    def api_verdict(symbol: str):
+        """Kết luận có thể cân nhắc mua / chờ thêm / không nên mua — xem verdict_engine."""
+        symbol = symbol.strip().upper()
+        if not is_vn_stock(symbol):
+            raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
+        try:
+            return verdict_for(symbol)
+        except (SystemExit, Exception) as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi tính kết luận: {str(e)[:200]}")
 
 
 if _SAFETY_OK:
