@@ -20,9 +20,18 @@ import InsiderPanel from './components/InsiderPanel';
 const PortfolioReview = lazy(() => import('./components/PortfolioReview'));
 import { ShieldCheck, Briefcase } from 'lucide-react';
 
-// API endpoint: dev mặc định localhost; prod đặt VITE_API_BASE qua Vercel env.
+// API endpoint. Production đặt VITE_API_BASE qua Vercel env. Chạy local mà không
+// đặt thì gọi về CHÍNH máy đang phục vụ trang, cổng 8765: mở bằng localhost thì gọi
+// localhost, mở từ điện thoại qua IP Wi-Fi thì gọi đúng IP đó. Bản cũ ghim cứng một
+// IP trong .env.local, nên mỗi lần hotspot cấp IP khác là mọi panel treo "Đang tải".
 // Bỏ trailing slash để không gây double-slash khi nối path.
-const RAW_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8765').replace(/\/$/, '');
+function resolveApiBase() {
+  const fromEnv = import.meta.env.VITE_API_BASE;
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  const { protocol, hostname } = window.location;
+  return `${protocol}//${hostname}:8765`;
+}
+const RAW_BASE = resolveApiBase();
 const API_BASE = `${RAW_BASE}/api`;
 
 // 4 tab mobile. Thứ tự theo việc người dùng làm nhiều nhất: xem mã -> xem thị

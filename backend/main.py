@@ -126,22 +126,37 @@ load_dotenv()
 
 app = FastAPI(title="Vietnamese Stock AI Analyzer API")
 
-# Setup CORS for Frontend React integration.
-# CORS_ORIGINS env var can override (comma-separated).
-_default_origins = [
-    "http://localhost:5180",
-    "http://127.0.0.1:5180",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5273",
-    "http://127.0.0.1:5273",
-]
+# CORS.
+#
+# Đặt CORS_ORIGINS (phân tách bằng dấu phẩy) thì dùng ĐÚNG danh sách đó — production
+# luôn đặt. Không đặt nghĩa là đang chạy local: cho phép localhost và mọi địa chỉ
+# mạng nội bộ (10.x, 172.16-31.x, 192.168.x, 100.64-127.x của Tailscale), để mở từ
+# điện thoại qua IP Wi-Fi không bị trình duyệt chặn dữ liệu. Danh sách ghim cứng từng
+# IP thì hỏng mỗi lần hotspot cấp IP khác. Địa chỉ công khai không bao giờ khớp.
+#
+# Neo ^...$ là bắt buộc: không có $ thì "http://10.0.0.1.evil.com" khớp phần đầu.
+DEV_ORIGIN_REGEX = (
+    r"^https?://("
+    r"localhost|127\.0\.0\.1"
+    r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r"|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}"
+    r")(:\d+)?$"
+)
+
 _env_origins = os.getenv("CORS_ORIGINS")
-allow_origins = [o.strip() for o in _env_origins.split(",") if o.strip()] if _env_origins else _default_origins
+if _env_origins:
+    allow_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
+    allow_origin_regex = None
+else:
+    allow_origins = []
+    allow_origin_regex = DEV_ORIGIN_REGEX
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -203,3 +203,73 @@ class TestWatchPortfolioNews:
         second = client.post("/api/alerts/watch-portfolio").json()
         assert second["created_count"] == 0
         assert second["skipped"] == ["SSI"]
+
+
+@pytest.fixture()
+def cors_app(tmp_path, monkeypatch):
+    """Dựng lại app với CORS_ORIGINS do từng test quyết định (None = chạy local)."""
+
+    def make(cors_origins=None):
+        monkeypatch.setenv("STOCK_DB_PATH", str(tmp_path / "cors.db"))
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        if cors_origins is None:
+            monkeypatch.delenv("CORS_ORIGINS", raising=False)
+        else:
+            monkeypatch.setenv("CORS_ORIGINS", cors_origins)
+        import storage_service
+
+        importlib.reload(storage_service)
+        import main
+
+        importlib.reload(main)
+        return TestClient(main.app)
+
+    return make
+
+
+def _allowed(client, origin):
+    return client.get("/api/health", headers={"Origin": origin}).headers.get(
+        "access-control-allow-origin"
+    )
+
+
+class TestCors:
+    """
+    Mở app trên điện thoại qua IP Wi-Fi từng hỏng hai lần trong một buổi: laptop đổi
+    IP, và danh sách CORS chỉ có localhost. Giao diện vẫn hiện nên rất khó nhận ra —
+    chỉ là mọi panel treo "Đang tải" vì trình duyệt chặn dữ liệu.
+    """
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://localhost:5273",
+            "http://127.0.0.1:5273",
+            "http://10.211.90.218:5273",  # hotspot điện thoại
+            "http://192.168.1.242:5273",  # Wi-Fi nhà
+            "http://172.20.1.5:5273",
+            "http://100.86.96.85:5273",  # Tailscale
+        ],
+    )
+    def test_mang_noi_bo_duoc_phep_khi_chay_local(self, cors_app, origin):
+        assert _allowed(cors_app(), origin) == origin
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://evil.example.com",
+            "http://8.8.8.8:5273",
+            "http://172.32.0.1:5273",  # ngay ngoài dải 172.16-31
+            "http://100.128.0.1:5273",  # ngay ngoài dải Tailscale 100.64-127
+            "http://10.0.0.1.evil.com",  # cần neo $ mới chặn được
+            "http://192.168.1.1.nip.io:5273",
+        ],
+    )
+    def test_dia_chi_cong_khai_bi_chan(self, cors_app, origin):
+        assert _allowed(cors_app(), origin) is None
+
+    def test_dat_cors_origins_thi_tat_quy_tac_mang_noi_bo(self, cors_app):
+        # Production khai báo đúng tên miền frontend; IP nội bộ không được lọt qua.
+        client = cors_app("https://vn-stock-ai.vercel.app")
+        assert _allowed(client, "https://vn-stock-ai.vercel.app") == "https://vn-stock-ai.vercel.app"
+        assert _allowed(client, "http://192.168.1.242:5273") is None

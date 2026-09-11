@@ -44,13 +44,32 @@ npm run dev                              # http://localhost:5273
 
 Trên Windows có thể chạy cả hai bằng `start_servers.bat`.
 
-Ba cổng phải khớp nhau, đổi một chỗ thì đổi cả ba:
+### Mở trên điện thoại
+
+```bash
+start_servers.bat lan
+```
+
+Rồi mở trên điện thoại cùng mạng địa chỉ mà script in ra, dạng `http://<IPv4>:5273`.
+Không cần cấu hình gì thêm: frontend tự gọi API về chính máy đang phục vụ trang, còn
+khi chạy local thì backend cho phép mọi địa chỉ mạng nội bộ (10.x, 172.16–31.x,
+192.168.x, Tailscale 100.64–127.x). Đổi Wi-Fi, hay hotspot cấp IP mới, cũng không phải
+sửa file nào.
+
+Mặc định (không có `lan`) server chỉ nghe trên máy này. Chế độ `lan` cho **mọi thiết bị
+cùng mạng** mở được app — kể cả danh mục thật của bạn — nên chỉ dùng ở Wi-Fi nhà hoặc
+hotspot của chính bạn, không dùng ở Wi-Fi công cộng.
+
+Hai cổng phải khớp nhau, đổi một chỗ thì đổi cả hai:
 
 | Thành phần | Cổng | Khai báo ở |
 | --- | --- | --- |
-| Backend | 8765 | `backend/main.py`, `start_servers.bat` |
-| Frontend dev server | 5273 | `frontend/vite.config.js`, `backend/main.py` (CORS) |
-| Frontend gọi API | 8765 | `frontend/src/App.jsx` (`API_BASE`) hoặc `VITE_API_BASE` |
+| Backend | 8765 | `start_servers.bat`, `frontend/src/App.jsx` (`resolveApiBase`) |
+| Frontend dev server | 5273 | `frontend/vite.config.js`, `start_servers.bat` |
+
+`VITE_API_BASE` chỉ cần khi backend nằm ở máy hoặc cổng khác (production đặt qua
+Vercel). Đặt `CORS_ORIGINS` thì backend dùng đúng danh sách đó và tắt quy tắc mạng
+nội bộ — production luôn phải đặt.
 
 ### Lãi tiết kiệm dùng để so với cổ tức
 

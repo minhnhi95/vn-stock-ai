@@ -190,7 +190,8 @@ UPDATE portfolio SET cash = 100000000, created_at = EXTRACT(epoch FROM now()) * 
 
 Local vẫn chạy bình thường:
 - Không có `DATABASE_URL` → SQLite file `backend/data.db`
-- Frontend gọi `http://127.0.0.1:8765/api` (default `VITE_API_BASE` undefined)
+- Không đặt `VITE_API_BASE` → frontend gọi API về chính máy đang phục vụ trang, cổng 8765
+- Không đặt `CORS_ORIGINS` → backend cho phép localhost và mọi IP mạng nội bộ. **Production phải đặt `CORS_ORIGINS`**: có nó, quy tắc mạng nội bộ tự tắt
 
 Để test production-like local:
 ```bash
