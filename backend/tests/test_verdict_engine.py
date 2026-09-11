@@ -175,3 +175,12 @@ class TestDanhGiaLichSu:
     def test_ket_luan_that_luon_co_cau_tom_tat(self):
         h = ve.build_verdict("X", _df(), GOOD_F, _safety(), None, STATS)["history"]
         assert h["available"] and h["summary"]
+
+
+class TestGia:
+    def test_kem_gia_dong_cua_moi_nhat(self):
+        r = ve.build_verdict("X", _df(n=300), GOOD_F, _safety(), None, STATS)
+        assert r["price"] == 50_000.0 + 100.0 * 299
+
+    def test_khong_co_gia_thi_de_trong(self):
+        assert ve.build_verdict("X", None, GOOD_F, _safety(), None, STATS)["price"] is None

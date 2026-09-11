@@ -69,6 +69,10 @@ export default function VerdictCard({ apiBase, symbol }) {
               <span className="vd-headline">{data.headline}</span>
             </div>
 
+            {data.data_gaps?.map((gap) => (
+              <div key={gap} className="vd-gap">{gap}</div>
+            ))}
+
             {GROUPS.map((group) => {
               const rows = checks.filter((c) => c.group === group.key);
               if (!rows.length) return null;
@@ -126,6 +130,7 @@ export default function VerdictCard({ apiBase, symbol }) {
         }
         .vd-content { gap: 10px; }
         .vd-error { font-size: 11px; color: var(--color-sell); }
+        .vd-gap { font-size: 11px; color: var(--color-hold, #f59e0b); }
         .vd-loading { font-size: 12px; color: var(--text-muted); text-align: center; padding: 12px; }
         .vd-verdict {
           display: flex;

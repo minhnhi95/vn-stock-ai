@@ -322,6 +322,7 @@ def build_verdict(
 
     return {
         "symbol": symbol,
+        "price": close,
         "verdict": verdict,
         "label": LABELS[verdict],
         "headline": headline,
@@ -333,8 +334,12 @@ def build_verdict(
     }
 
 
-def verdict_for(symbol: str) -> Dict[str, Any]:
-    """Lấy dữ liệu thật rồi tính kết luận. Tách khỏi build_verdict để test không gọi mạng."""
+def verdict_for(symbol: str, vn100: Optional[set] = None) -> Dict[str, Any]:
+    """
+    Lấy dữ liệu thật rồi tính kết luận. Tách khỏi build_verdict để test không gọi mạng.
+
+    `vn100` truyền sẵn khi quét nhiều mã (jobs/verdict_scan.py) để khỏi lấy lại mỗi mã.
+    """
     from market_service import fetch_fundamentals
     from metric_explainer import load_benchmarks
     from safety_screen import screen_symbol
@@ -343,23 +348,35 @@ def verdict_for(symbol: str) -> Dict[str, Any]:
     symbol = (symbol or "").strip().upper()
     # 2 năm: đủ dài để đo tỷ lệ quá khứ; EMA200 đã được "mồi" sẵn trong stock_service.
     df, _ = fetch_stock_data(symbol, period="2y", interval="1d")
+    if df is None or df.empty:
+        # Không có giá thì không có kết luận. Trả "Chờ thêm" lúc này sẽ trông như một
+        # kết luận thật, trong khi thực ra là lỗi mạng hoặc dính hạn mức vnstock.
+        raise RuntimeError(f"Không lấy được dữ liệu giá của {symbol}.")
 
     fundamentals = fetch_fundamentals(symbol)
     if not fundamentals.get("available"):
         fundamentals = None
 
-    try:
-        from sector_service import get_vn100_symbols
+    if vn100 is None:
+        try:
+            from sector_service import get_vn100_symbols
 
-        vn100 = set(get_vn100_symbols())
-    except Exception:
-        from market_universe import vn100_fallback
+            vn100 = set(get_vn100_symbols())
+        except Exception:
+            from market_universe import vn100_fallback
 
-        vn100 = set(vn100_fallback())
+            vn100 = set(vn100_fallback())
 
-    safety = screen_symbol(symbol, df=df, fundamentals=fundamentals, vn100=vn100) if df is not None else None
+    safety = screen_symbol(symbol, df=df, fundamentals=fundamentals, vn100=vn100)
 
     bench = load_benchmarks()
     sector = (bench.get("symbol_sector") or {}).get(symbol)
     stats = ((bench.get("sectors") or {}).get(sector) or {}).get("metrics") if sector else None
-    return build_verdict(symbol, df, fundamentals, safety, sector, stats)
+    result = build_verdict(symbol, df, fundamentals, safety, sector, stats)
+    # Thiếu chỉ số cơ bản thì kết luận không bao giờ lên "có thể mua" (cần 2/3 tiêu chí
+    # nền tảng), nhưng người dùng cần biết đó là do thiếu dữ liệu chứ không phải do
+    # doanh nghiệp yếu.
+    result["data_gaps"] = [] if fundamentals else [
+        "Không lấy được chỉ số cơ bản, phần nền tảng doanh nghiệp để trống."
+    ]
+    return result

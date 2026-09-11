@@ -248,3 +248,75 @@ class TestDieuKienDaGo:
         )
         monkeypatch.setattr(alerts, "_fetch_symbol_snapshot", lambda symbol: {"symbol": symbol})
         assert alerts.check_alerts() == []
+
+
+class TestCanhBaoKetLuan:
+    """
+    Cảnh báo theo kết luận đọc lượt quét cả rổ trong DB: không tốn request vnstock, và
+    lượt quét quá cũ không được bắn như thể là kết luận của hôm nay.
+    """
+
+    def _scan(self, day, verdict, symbol="FPT"):
+        import storage_service
+        from verdict_engine import LABELS
+
+        storage_service.save_verdict_scan(
+            day,
+            {
+                "date": day,
+                "results": [
+                    {"symbol": symbol, "verdict": verdict, "label": LABELS[verdict], "headline": "lý do"}
+                ],
+            },
+        )
+
+    @pytest.fixture()
+    def today(self, alerts, monkeypatch):
+        from datetime import date
+
+        monkeypatch.setattr(alerts, "_today_vn", lambda: date(2026, 9, 11))
+        return alerts
+
+    def test_tao_duoc_khong_can_nguong(self, alerts):
+        assert alerts.create_alert("FPT", "verdict_buy", None)["threshold"] == 0.0
+
+    def test_luot_quet_ra_co_the_mua_thi_ban_kem_ly_do(self, today):
+        self._scan("2026-09-11", "buy_consider")
+        today.create_alert("FPT", "verdict_buy", None)
+        fired = today.check_alerts()
+        assert len(fired) == 1
+        assert fired[0]["context"]["verdict"]["label"] == "Có thể cân nhắc mua"
+        assert fired[0]["context"]["verdict"]["headline"] == "lý do"
+        assert today.list_alerts()[0]["active"] is False
+
+    def test_ket_luan_khac_thi_im(self, today):
+        self._scan("2026-09-11", "wait")
+        today.create_alert("FPT", "verdict_buy", None)
+        assert today.check_alerts() == []
+
+    def test_khong_nen_mua(self, today):
+        self._scan("2026-09-11", "avoid")
+        today.create_alert("FPT", "verdict_avoid", None)
+        assert len(today.check_alerts()) == 1
+
+    def test_luot_quet_cu_qua_4_ngay_thi_khong_ban(self, today):
+        self._scan("2026-09-06", "buy_consider")
+        today.create_alert("FPT", "verdict_buy", None)
+        assert today.check_alerts() == []
+
+    def test_qua_cuoi_tuan_van_dung_duoc(self, today):
+        self._scan("2026-09-07", "buy_consider")  # thứ 2 trước đó, hôm nay thứ 6: 4 ngày
+        today.create_alert("FPT", "verdict_buy", None)
+        assert len(today.check_alerts()) == 1
+
+    def test_chua_co_luot_quet_thi_im(self, today):
+        today.create_alert("FPT", "verdict_buy", None)
+        assert today.check_alerts() == []
+
+    def test_khong_ton_request_lay_gia(self, today, monkeypatch):
+        self._scan("2026-09-11", "buy_consider")
+        today.create_alert("FPT", "verdict_buy", None)
+        called = []
+        monkeypatch.setattr(today, "_fetch_symbol_snapshot", lambda symbol: called.append(symbol) or {})
+        today.check_alerts()
+        assert called == []

@@ -14,6 +14,7 @@ import MarketPanel from './components/MarketPanel';
 import DailyBrief from './components/DailyBrief';
 import SafetyCheck from './components/SafetyCheck';
 import VerdictCard from './components/VerdictCard';
+import VerdictScan from './components/VerdictScan';
 const SafetyScreenModal = lazy(() => import('./components/SafetyScreenModal'));
 import AlertsManager from './components/AlertsManager';
 import CalendarPanel from './components/CalendarPanel';
@@ -431,6 +432,15 @@ export default function App() {
           <div className="panel-slot" data-tab="market">
   <ErrorBoundary name="Bản tin sáng nay">
               <DailyBrief
+                apiBase={API_BASE}
+                onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
+              />
+            </ErrorBoundary>
+          </div>
+
+          <div className="panel-slot" data-tab="market">
+            <ErrorBoundary name="Kết luận cả rổ">
+              <VerdictScan
                 apiBase={API_BASE}
                 onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
               />

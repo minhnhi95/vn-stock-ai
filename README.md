@@ -153,7 +153,7 @@ cd frontend && npm run lint
 | Nhóm | Mô tả |
 | --- | --- |
 | Biểu đồ | 3 khung đồng bộ: nến + EMA20/50/200 + khối lượng, RSI(14) có mốc 30/70, MACD; crosshair chung, ô đọc OHLC theo con trỏ; giá cập nhật 5s trong phiên |
-| **Kết luận mua / không mua** | "Có thể cân nhắc mua / Chờ thêm / Không nên mua" cho mã đang xem, từ quy tắc công khai: an toàn, xu hướng (EMA50/EMA200, RSI), định giá và sinh lời so với ngành. Kèm từng tiêu chí đạt/trượt và tỷ lệ quy tắc từng đúng 20 phiên sau trong 2 năm qua, so với mọi phiên |
+| **Kết luận mua / không mua** | "Có thể cân nhắc mua / Chờ thêm / Không nên mua" cho mã đang xem, và **tự quét cả rổ** mỗi ngày giao dịch (VN100 + mã đang giữ + mã đặt cảnh báo), từ quy tắc công khai: an toàn, xu hướng (EMA50/EMA200, RSI), định giá và sinh lời so với ngành. Kèm từng tiêu chí đạt/trượt và tỷ lệ quy tắc từng đúng 20 phiên sau trong 2 năm qua, so với mọi phiên |
 | **Kiểm tra an toàn** | 6 tiêu chí ngưỡng cứng (thanh khoản, thị giá, nợ/vốn chủ, ROE, biên độ, rổ VN100). Chỉ chặn mã rủi ro, **không** gợi ý mã tốt. Quét được nhiều mã một lượt |
 | **Cơ bản có giải thích** | 13 chỉ số, mỗi chỉ số kèm một câu tiếng Việt đời thường ("Bạn trả 15,53 đồng để mua 1 đồng lợi nhuận mỗi năm"), trung vị cùng ngành để đối chiếu, và trường hợp con số đó đánh lừa |
 | Tin tức | Tin theo mã + tìm kiếm ngữ nghĩa |
@@ -161,7 +161,7 @@ cd frontend && npm run lint
 | **Danh mục thật** | Nhập sao kê CSV từ công ty chứng khoán → vị thế, giá vốn FIFO, lãi/lỗ **đã trừ phí và thuế TNCN 0,1%**, thống kê chi phí giao dịch |
 | Khối ngoại | Mua/bán ròng theo mã (khối lượng + VND) và xếp hạng toàn VN100 |
 | Toàn cảnh thị trường | Heatmap ngành theo mã đại diện VN100, khối ngoại mua/bán ròng |
-| Theo dõi | Cảnh báo giá / RSI / EMA cắt / **có tin mới**, tự kiểm tra + thông báo trình duyệt; một nút bật báo tin cho toàn bộ danh mục thật; lịch sự kiện; giao dịch nội bộ |
+| Theo dõi | Cảnh báo giá / RSI / EMA cắt / **có tin mới** / **kết luận thành "có thể cân nhắc mua" hoặc "không nên mua"**, tự kiểm tra + thông báo trình duyệt; một nút bật báo tin cho toàn bộ danh mục thật; lịch sự kiện; giao dịch nội bộ |
 | **Bản tin sáng** | Job nền dùng Antigravity CLI viết bản tin tiếng Việt: chuyện gì xảy ra, **thị trường đã phản ánh chưa**, điều gì làm nhận định sai. Không chấm điểm, không khuyến nghị mua/bán |
 | Tìm kiếm | Toàn bộ ~1.700 mã niêm yết theo mã, tên doanh nghiệp hoặc ngành; không dấu vẫn khớp |
 
@@ -219,6 +219,32 @@ Mở app Antigravity, đăng nhập lại, rồi chạy thử bằng tay:
 ```powershell
 .\run_daily_brief.bat
 ```
+## Quét kết luận cả rổ
+
+Job `jobs/verdict_scan.py` chạy đúng quy tắc của `verdict_engine.py` cho mã đang giữ,
+mã đang đặt cảnh báo và rổ VN100 (theo thứ tự đó), rồi ghi vào bảng `verdict_scan`
+trong DB. Panel **Kết luận cả rổ** ở tab Thị trường đọc ra: số mã mỗi loại, mã vừa đổi
+kết luận so với phiên trước, mã đang giữ, và từng danh sách. Mỗi dòng ghi rõ quy tắc
+từng đúng hơn, ngang hay kém chọn bừa với chính mã đó. Bấm vào mã để xem từng tiêu chí.
+
+Mỗi mã tốn khoảng 3 request vnstock nên job nghỉ 9 giây giữa các mã; một lượt khoảng
+110 mã mất 20-25 phút. Mã lỗi hoặc thiếu chỉ số cơ bản được thử lại một lần sau một
+phút. Quét được dưới một nửa số mã thì không ghi, giữ nguyên lượt cũ.
+
+**Chạy tự động.** Task Scheduler có task **"VN Stock - Quet ket luan"**, chạy 15:30 từ
+thứ Hai đến thứ Sáu (`run_verdict_scan.bat auto`), sau giờ đóng cửa để dùng giá đóng
+cửa của phiên đó. Log ở `backend/logs/verdict_scan.log`. Chạy tay:
+
+```powershell
+.\run_verdict_scan.bat
+# Thử vài mã, chỉ in, không ghi vào DB:
+cd backend; ..\.venv\Scripts\python -m jobs.verdict_scan --symbols FPT VNM
+```
+
+Cảnh báo **"Kết luận: Có thể cân nhắc mua"** / **"Kết luận: Không nên mua"** đọc lượt
+quét mới nhất nên không tốn request nào. Lượt quét cũ hơn 4 ngày bị bỏ qua: máy tắt cả
+tuần thì cảnh báo không bắn một kết luận cũ như thể của hôm nay.
+
 ## Trung vị ngành cho phần "Cơ bản"
 
 Panel cơ bản so từng chỉ số với trung vị ngành ICB. Bảng trung vị **không tính lúc
@@ -333,6 +359,7 @@ backend/
   jobs/price_reaction.py      # đo "thị trường đã phản ánh tin chưa"
   jobs/daily_brief.py         # ghép tất cả -> bản tin, lưu vào DB
   jobs/sector_benchmarks.py   # trung vị chỉ số theo ngành -> data/sector_benchmarks.json
+  jobs/verdict_scan.py        # quét kết luận cả rổ sau giờ đóng cửa -> DB (verdict_scan)
   data/sector_benchmarks.json # bảng tham chiếu, đi kèm mã nguồn (chỉ đọc lúc chạy)
   search_service.py           # index mã niêm yết cho ô tìm kiếm
   broker_import_service.py    # parse sao kê CSV của công ty chứng khoán

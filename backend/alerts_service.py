@@ -15,6 +15,9 @@ Các loại điều kiện hỗ trợ:
 - ema_cross_down             : EMA20 vừa cắt XUỐNG EMA50
 - news_new                   : có tin mới về doanh nghiệp kể từ lúc đặt cảnh báo
                                 (threshold không dùng — đặt 0)
+- verdict_buy / verdict_avoid: lượt quét kết luận gần nhất (jobs/verdict_scan.py)
+                                ra "Có thể cân nhắc mua" / "Không nên mua"
+                                (threshold không dùng — đặt 0)
 
 Workflow:
 1. POST /alerts → create_alert(...)
@@ -80,6 +83,8 @@ VALID_CONDITIONS = {
     "ema_cross_up",
     "ema_cross_down",
     "news_new",
+    "verdict_buy",
+    "verdict_avoid",
 }
 
 
@@ -101,7 +106,7 @@ def create_alert(symbol: str, condition: str, threshold: float) -> Dict[str, Any
             f"Hỗ trợ: {sorted(VALID_CONDITIONS)}"
         )
 
-    # threshold cho ai_signal_change không có ý nghĩa thực — chấp nhận 0/None.
+    # news_new và verdict_* không dùng threshold — chấp nhận 0/None.
     try:
         threshold_val = float(threshold) if threshold is not None else 0.0
     except (TypeError, ValueError):
@@ -314,6 +319,53 @@ def _eval_news_new(rule: Dict[str, Any], snap: Dict[str, Any], ctx: Dict[str, An
     return latest["published_ts"] > int(rule.get("created_at") or 0)
 
 
+# ---------- Cảnh báo theo kết luận quét cả rổ ----------
+# Đọc lượt quét mới nhất trong DB (job ghi sau giờ đóng cửa), nên kiểm tra không tốn
+# request vnstock nào.
+_VERDICT_CONDITIONS = {"verdict_buy": "buy_consider", "verdict_avoid": "avoid"}
+
+# Lượt quét cũ hơn ngần này ngày (cuối tuần cộng một ngày lễ) thì bỏ qua: nếu máy tắt
+# cả tuần và job lịch không chạy, một kết luận cũ không được bắn như thể của hôm nay.
+MAX_SCAN_AGE_DAYS = 4
+
+
+def _today_vn():
+    return datetime.now(VN_TZ).date()
+
+
+def _load_scan_verdicts() -> Dict[str, Dict[str, Any]]:
+    """symbol -> dòng kết luận của lượt quét mới nhất; rỗng nếu chưa có hoặc đã quá cũ."""
+    try:
+        scan = storage.get_verdict_scan()
+    except Exception as e:
+        print(f"[alerts_service] Không đọc được lượt quét kết luận: {e}")
+        return {}
+    if not scan:
+        return {}
+    try:
+        scan_day = datetime.strptime(str(scan.get("scan_date") or scan.get("date")), "%Y-%m-%d").date()
+    except ValueError:
+        return {}
+    if (_today_vn() - scan_day).days > MAX_SCAN_AGE_DAYS:
+        return {}
+    return {
+        row["symbol"]: {**row, "scan_date": scan_day.isoformat()}
+        for row in scan.get("results") or []
+        if row.get("symbol")
+    }
+
+
+def _eval_verdict(rule: Dict[str, Any], snap: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
+    """
+    Bắn khi lượt quét gần nhất cho mã này đúng kết luận người dùng đang chờ.
+
+    Xét theo trạng thái, giống "giá vượt": nếu lúc đặt mà kết luận đã đúng thì bắn ở
+    lần kiểm tra tới — người dùng vẫn cần biết điều đó.
+    """
+    row = (ctx.get("verdict") or {}).get(rule["symbol"])
+    return bool(row) and row.get("verdict") == _VERDICT_CONDITIONS.get(rule["condition"])
+
+
 _EVALUATORS = {
     "price_above": _eval_price_above,
     "price_below": _eval_price_below,
@@ -322,6 +374,8 @@ _EVALUATORS = {
     "ema_cross_up": _eval_ema_cross_up,
     "ema_cross_down": _eval_ema_cross_down,
     "news_new": _eval_news_new,
+    "verdict_buy": _eval_verdict,
+    "verdict_avoid": _eval_verdict,
 }
 
 
@@ -347,15 +401,20 @@ def check_alerts() -> List[Dict[str, Any]]:
     if not active_rules:
         return []
 
-    ctx: Dict[str, Any] = {"news": {}}
+    ctx: Dict[str, Any] = {"news": {}, "verdict": {}}
 
     # Chỉ lấy tin cho mã thật sự có rule news_new. Lấy cho mọi mã sẽ tốn thêm một
     # request vnstock mỗi mã mỗi lần check, trong khi hạn mức chỉ 20 request/phút.
     for sym in {r["symbol"] for r in active_rules if r["condition"] == "news_new"}:
         ctx["news"][sym] = _fetch_latest_news(sym)
 
-    # Group theo symbol → fetch 1 lần
-    symbols = sorted({r["symbol"] for r in active_rules})
+    # Kết luận đọc từ DB, chỉ nạp khi thật sự có rule cần.
+    if any(r["condition"] in _VERDICT_CONDITIONS for r in active_rules):
+        ctx["verdict"] = _load_scan_verdicts()
+
+    # Group theo symbol → fetch 1 lần. Mã chỉ có rule kết luận thì không cần giá
+    # realtime — bỏ qua để khỏi tốn request vnstock.
+    symbols = sorted({r["symbol"] for r in active_rules if r["condition"] not in _VERDICT_CONDITIONS})
     snapshots: Dict[str, Dict[str, Any]] = {}
     for sym in symbols:
         try:
@@ -392,6 +451,9 @@ def check_alerts() -> List[Dict[str, Any]]:
                     # Cảnh báo tin mà không nói tin gì thì người dùng phải tự đi mò.
                     "news": (ctx.get("news") or {}).get(rule["symbol"])
                     if rule["condition"] == "news_new"
+                    else None,
+                    "verdict": (ctx.get("verdict") or {}).get(rule["symbol"])
+                    if rule["condition"] in _VERDICT_CONDITIONS
                     else None,
                 },
             })

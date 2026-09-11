@@ -151,6 +151,11 @@ CREATE TABLE IF NOT EXISTS daily_brief (
     model TEXT,
     generated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS verdict_scan (
+    scan_date TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    generated_at INTEGER NOT NULL
+);
 """
 
 SCHEMA_PG = """
@@ -183,6 +188,11 @@ CREATE TABLE IF NOT EXISTS daily_brief (
     brief_date TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
     model TEXT,
+    generated_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS verdict_scan (
+    scan_date TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
     generated_at BIGINT NOT NULL
 );
 """
@@ -487,3 +497,78 @@ def list_brief_dates(limit: int = 30) -> List[str]:
             (limit,),
         )
     return [_row_get(r, "brief_date") for r in rows]
+
+
+# ---------- Quét kết luận cả rổ ----------
+# Job chạy nền (jobs/verdict_scan.py) ghi mỗi ngày một dòng; API và cảnh báo chỉ
+# đọc. Giữ theo ngày để so được kết luận hôm nay với phiên trước.
+
+def save_verdict_scan(scan_date: str, payload: Dict[str, Any]) -> None:
+    """Ghi đè lượt quét của ngày. Chạy lại job trong ngày sẽ thay bằng lượt mới."""
+    _init_schema_once()
+    with _conn() as con:
+        _begin(con)
+        _execute(
+            con,
+            "INSERT INTO verdict_scan(scan_date, payload, generated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (scan_date) DO UPDATE SET payload = EXCLUDED.payload, "
+            "generated_at = EXCLUDED.generated_at",
+            (scan_date, json.dumps(payload, ensure_ascii=False), int(time.time())),
+        )
+        _commit(con)
+
+
+def _scan_row_to_dict(row) -> Optional[Dict[str, Any]]:
+    if not row:
+        return None
+    try:
+        payload = json.loads(_row_get(row, "payload"))
+    except (TypeError, ValueError):
+        return None
+    payload["scan_date"] = _row_get(row, "scan_date")
+    payload["stored_at"] = _row_get(row, "generated_at")
+    return payload
+
+
+def get_verdict_scan(scan_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Lượt quét của một ngày, hoặc lượt mới nhất nếu không truyền ngày."""
+    _init_schema_once()
+    with _conn() as con:
+        if scan_date:
+            row = _fetchone(
+                con,
+                "SELECT scan_date, payload, generated_at FROM verdict_scan WHERE scan_date = ?",
+                (scan_date,),
+            )
+        else:
+            row = _fetchone(
+                con,
+                "SELECT scan_date, payload, generated_at FROM verdict_scan "
+                "ORDER BY scan_date DESC LIMIT 1",
+            )
+    return _scan_row_to_dict(row)
+
+
+def get_previous_verdict_scan(before_date: str) -> Optional[Dict[str, Any]]:
+    """Lượt quét gần nhất TRƯỚC một ngày — mốc để tìm mã vừa đổi kết luận."""
+    _init_schema_once()
+    with _conn() as con:
+        row = _fetchone(
+            con,
+            "SELECT scan_date, payload, generated_at FROM verdict_scan "
+            "WHERE scan_date < ? ORDER BY scan_date DESC LIMIT 1",
+            (before_date,),
+        )
+    return _scan_row_to_dict(row)
+
+
+def list_verdict_scan_dates(limit: int = 30) -> List[str]:
+    """Các ngày đã có lượt quét, mới nhất trước."""
+    _init_schema_once()
+    with _conn() as con:
+        rows = _fetchall(
+            con,
+            "SELECT scan_date FROM verdict_scan ORDER BY scan_date DESC LIMIT ?",
+            (limit,),
+        )
+    return [_row_get(r, "scan_date") for r in rows]

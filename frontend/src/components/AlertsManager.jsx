@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bell, BellRing, Trash2, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Newspaper } from 'lucide-react';
+import { Bell, BellRing, Trash2, Plus, RefreshCw, AlertTriangle, CheckCircle2, Search, Newspaper, Target } from 'lucide-react';
 
 const CONDITIONS = [
   { id: 'price_above', label: 'Giá vượt', needsThreshold: true, unit: 'đ', placeholder: 'VD: 80000' },
@@ -9,6 +9,8 @@ const CONDITIONS = [
   { id: 'ema_cross_up', label: 'EMA cắt lên', needsThreshold: false, unit: '', placeholder: '' },
   { id: 'ema_cross_down', label: 'EMA cắt xuống', needsThreshold: false, unit: '', placeholder: '' },
   { id: 'news_new', label: 'Có tin mới', needsThreshold: false, unit: '', placeholder: '' },
+  { id: 'verdict_buy', label: 'Kết luận: Có thể cân nhắc mua', needsThreshold: false, unit: '', placeholder: '' },
+  { id: 'verdict_avoid', label: 'Kết luận: Không nên mua', needsThreshold: false, unit: '', placeholder: '' },
 ];
 
 const CONDITION_MAP = CONDITIONS.reduce((acc, c) => {
@@ -375,6 +377,18 @@ export default function AlertsManager({ apiBase, marketOpen = false }) {
                         <Newspaper size={10} />
                         <span>
                           <b>{t.symbol}</b> — {t.context.news.title}
+                        </span>
+                      </span>
+                    ))}
+                  {/* Cảnh báo kết luận: in luôn lý do để khỏi phải mở từng mã. */}
+                  {checkResult.triggered
+                    .filter((t) => t.context?.verdict?.label)
+                    .slice(0, 3)
+                    .map((t) => (
+                      <span key={`${t.id}-verdict`} className="alert-check-news">
+                        <Target size={10} />
+                        <span>
+                          <b>{t.symbol}</b> — {t.context.verdict.label}: {t.context.verdict.headline}
                         </span>
                       </span>
                     ))}

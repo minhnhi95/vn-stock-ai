@@ -26,6 +26,8 @@ from market_universe import VN30_SYMBOLS
 from storage_service import (
     get_daily_brief,
     list_brief_dates,
+    get_verdict_scan,
+    list_verdict_scan_dates,
     clear_real_transactions,
     delete_real_transaction,
     insert_real_transactions,
@@ -945,6 +947,24 @@ def api_brief(date: Optional[str] = None):
 @app.get("/api/brief/dates")
 def api_brief_dates(limit: int = 30):
     return {"dates": list_brief_dates(limit=max(1, min(180, limit)))}
+
+
+# Chỉ ĐỌC từ DB. Job nền (jobs/verdict_scan.py) tự quét cả rổ sau giờ đóng cửa —
+# một lượt mất ~20 phút vì hạn mức vnstock nên không chạy trong request.
+@app.get("/api/verdict/scan")
+def api_verdict_scan(date: Optional[str] = None):
+    scan = get_verdict_scan(date)
+    if scan is None:
+        return {
+            "available": False,
+            "reason": (
+                "Chưa có lượt quét nào. Job tự chạy lúc 15:30 các ngày thứ 2 đến thứ 6, "
+                "hoặc chạy tay file run_verdict_scan.bat."
+            ),
+            "dates": list_verdict_scan_dates(limit=10),
+        }
+    scan["available"] = True
+    return scan
 
 
 if __name__ == "__main__":
