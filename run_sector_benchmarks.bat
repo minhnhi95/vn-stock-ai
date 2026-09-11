@@ -22,7 +22,14 @@ set PYTHONUTF8=1
 set PYTHONUNBUFFERED=1
 
 echo [%date% %time%] Bat dau quet chi so co ban theo nganh...
-"..\.venv\Scripts\python.exe" -X utf8 -m jobs.sector_benchmarks
+if /i "%~1"=="auto" (
+    REM Chay theo lich: khong ai ngoi xem man hinh, nen ghi het ra file log.
+    if not exist "logs" mkdir "logs"
+    echo [%date% %time%] Bat dau >> "logs\sector_benchmarks.log"
+    "..\.venv\Scripts\python.exe" -X utf8 -m jobs.sector_benchmarks >> "logs\sector_benchmarks.log" 2>&1
+) else (
+    "..\.venv\Scripts\python.exe" -X utf8 -m jobs.sector_benchmarks
+)
 
 if errorlevel 1 (
     echo [%date% %time%] THAT BAI - bang cu duoc giu nguyen.

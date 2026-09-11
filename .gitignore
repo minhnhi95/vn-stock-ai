@@ -41,3 +41,6 @@ Thumbs.db
 
 # Pytest
 .pytest_cache/
+
+# Log cua job chay theo lich (run_*.bat auto)
+backend/logs/

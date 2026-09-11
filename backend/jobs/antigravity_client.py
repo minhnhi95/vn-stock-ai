@@ -112,6 +112,17 @@ def _parse_output(stdout: str) -> Dict[str, Any]:
     )
 
 
+# agy hết --print-timeout mà mô hình chưa trả lời vẫn in status SUCCESS, kèm response
+# rỗng, 0 token, 0 lượt. Coi đó là thành công thì job ghi ra một bản tin rỗng, hoặc báo
+# nhầm "schema không hợp lệ". Trên thực tế gần như luôn là app Antigravity chưa mở hoặc
+# phiên đăng nhập đã hết hạn — nên nói thẳng điều đó.
+_NO_RESPONSE_HINT = (
+    "Antigravity không trả lời: mô hình chưa nhận được yêu cầu (0 token, 0 lượt). "
+    "Thường là do app Antigravity chưa mở hoặc phiên đăng nhập đã hết hạn — mở app "
+    "Antigravity, đăng nhập lại, rồi chạy lại job."
+)
+
+
 def run_agent(
     prompt: str,
     *,
@@ -166,7 +177,7 @@ def run_agent(
             cwd=cwd,
         )
     except subprocess.TimeoutExpired as exc:
-        raise AntigravityError(f"agy quá {timeout}s chưa trả lời.") from exc
+        raise AntigravityError(f"agy quá {timeout}s chưa trả lời. {_NO_RESPONSE_HINT}") from exc
     finally:
         if schema_path:
             try:
@@ -185,13 +196,25 @@ def run_agent(
             "rồi chạy job này."
         )
 
+    if "print timeout" in combined and "turn in progress" in combined:
+        raise AntigravityError(_NO_RESPONSE_HINT)
+
     payload = _parse_output(stdout)
+    usage = payload.get("usage") or {}
+    if (
+        payload.get("status") == "SUCCESS"
+        and not payload.get("num_turns")
+        and not payload.get("response")
+        and not payload.get("structured_output")
+        and not int(usage.get("input_tokens") or 0)
+    ):
+        raise AntigravityError(_NO_RESPONSE_HINT)
+
     if payload.get("status") != "SUCCESS":
         raise AntigravityError(
             f"agy trả về status={payload.get('status')}: {payload.get('error') or 'không rõ lý do'}"
         )
 
-    usage = payload.get("usage") or {}
     data = payload.get("structured_output")
     if schema is not None and not isinstance(data, dict):
         raise AntigravityError(

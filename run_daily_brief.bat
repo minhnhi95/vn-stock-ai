@@ -20,7 +20,14 @@ REM ssl_bootstrap.py da tu xu ly, nhung dat san day cho chac.
 set PYTHONUTF8=1
 
 echo [%date% %time%] Bat dau sinh ban tin...
-"..\.venv\Scripts\python.exe" -X utf8 -m jobs.daily_brief
+if /i "%~1"=="auto" (
+    REM Chay theo lich: khong ai ngoi xem man hinh, nen ghi het ra file log.
+    if not exist "logs" mkdir "logs"
+    echo [%date% %time%] Bat dau >> "logs\daily_brief.log"
+    "..\.venv\Scripts\python.exe" -X utf8 -m jobs.daily_brief >> "logs\daily_brief.log" 2>&1
+) else (
+    "..\.venv\Scripts\python.exe" -X utf8 -m jobs.daily_brief
+)
 
 if errorlevel 1 (
     echo [%date% %time%] THAT BAI - xem thong bao loi ben tren.

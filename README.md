@@ -201,6 +201,19 @@ chính mấy phiên đột biến tự kéo mốc lên và một cú tăng 2,5×
 
 ---
 
+
+**Chạy tự động.** Task Scheduler có sẵn task **"VN Stock - Ban tin sang"**, chạy 07:30 từ
+thứ Hai đến thứ Sáu (`run_daily_brief.bat auto`). Khi chạy theo lịch, mọi output ghi vào
+`backend/logs/daily_brief.log` — mở file này đầu tiên khi bản tin sáng không cập nhật.
+Mỗi lần chạy bị giới hạn 25 phút; quá thì job dừng và in ra đúng dòng code đang kẹt.
+
+**Khi log báo "Antigravity không trả lời (0 token, 0 lượt)".** agy vẫn chạy nhưng yêu cầu
+không tới được mô hình — thường là app Antigravity chưa mở hoặc phiên đăng nhập đã hết hạn.
+Mở app Antigravity, đăng nhập lại, rồi chạy thử bằng tay:
+
+```powershell
+.\run_daily_brief.bat
+```
 ## Trung vị ngành cho phần "Cơ bản"
 
 Panel cơ bản so từng chỉ số với trung vị ngành ICB. Bảng trung vị **không tính lúc

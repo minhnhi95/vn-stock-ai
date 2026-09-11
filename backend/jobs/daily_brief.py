@@ -17,6 +17,7 @@ Chạy: python -m jobs.daily_brief  (từ thư mục backend)
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import sys
 import time
@@ -275,7 +276,14 @@ def generate_brief(
     }
 
 
+# Giới hạn tổng cho một lần chạy. Job theo lịch không có ai ngồi xem: mạng chập
+# chờn (TLS tới máy chủ giá treo, vnstock tự thử lại nhiều lần) có thể kéo một lần
+# chạy ra rất lâu. Quá mức này thì dừng hẳn và in stack ra log, để biết kẹt ở đâu.
+WATCHDOG_SECONDS = 25 * 60
+
+
 def main() -> int:
+    faulthandler.dump_traceback_later(WATCHDOG_SECONDS, exit=True)
     parser = argparse.ArgumentParser(description="Sinh bản tin chứng khoán buổi sáng")
     parser.add_argument("--symbols", nargs="*", help="Mã cụ thể (mặc định: danh mục thật + VN30)")
     parser.add_argument("--model", default=MODEL_DEEP, help="Model Antigravity")
