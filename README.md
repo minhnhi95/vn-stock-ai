@@ -60,6 +60,31 @@ Mặc định (không có `lan`) server chỉ nghe trên máy này. Chế độ 
 cùng mạng** mở được app — kể cả danh mục thật của bạn — nên chỉ dùng ở Wi-Fi nhà hoặc
 hotspot của chính bạn, không dùng ở Wi-Fi công cộng.
 
+### Dùng khi ra ngoài, ở mạng khác
+
+Dùng Tailscale — máy này và điện thoại đã ở chung một mạng Tailscale:
+
+```bash
+start_servers.bat tailscale
+```
+
+Bật app Tailscale trên điện thoại, rồi mở địa chỉ script in ra, dạng
+`http://100.x.x.x:5273`. Địa chỉ này cố định cho máy này dù bạn đổi sang mạng nào.
+Điện thoại dùng 4G hay Wi-Fi nào cũng được.
+
+Khác với chế độ `lan`: server **chỉ** nghe trên địa chỉ Tailscale. Dù laptop đang bắt
+Wi-Fi quán cà phê, người cùng mạng đó cũng không vào được — chỉ thiết bị đăng nhập tài
+khoản Tailscale của bạn mới vào được. Tailscale chưa kết nối thì script dừng hẳn, không
+tự chuyển sang mở toàn mạng. Ở chế độ này, mở `localhost` ngay trên máy cũng không được;
+dùng luôn địa chỉ Tailscale.
+
+Muốn để laptop ở nhà và chỉ mang điện thoại: chạy lệnh trên trước khi đi, cắm sạc, và
+chỉnh Windows để máy không ngủ khi cắm điện (Settings → System → Power). Máy ngủ là mất
+kết nối.
+
+Chưa nên đưa app lên cloud (Vercel/Railway theo `DEPLOY.md`) để dùng thay: app chưa có
+đăng nhập, ai có đường link đều xem được danh mục thật của bạn.
+
 Hai cổng phải khớp nhau, đổi một chỗ thì đổi cả hai:
 
 | Thành phần | Cổng | Khai báo ở |
