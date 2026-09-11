@@ -1,8 +1,8 @@
 """
 AI giải thích một mã — không được trả nhãn mua/bán dù mô hình tự ý thêm vào.
 
-Không test nào gọi Gemini thật: mô hình được thay bằng bản giả trả đúng thứ ta
-muốn thử, kể cả những thứ prompt đã cấm.
+Không test nào gọi Gemini thật: gemini_client.generate_text được thay bằng bản
+giả trả đúng thứ ta muốn thử, kể cả những thứ prompt đã cấm.
 """
 from __future__ import annotations
 
@@ -13,29 +13,16 @@ import ai_service
 FORBIDDEN = {"recommendation", "confidence", "target_price", "stop_loss", "action_plan"}
 
 
-def _fake_genai(payload_text):
-    class _Response:
-        text = payload_text
-
-    class _Model:
-        def __init__(self, name):
-            pass
-
-        def generate_content(self, prompt, generation_config=None):
-            return _Response()
-
-    class _Genai:
-        @staticmethod
-        def configure(api_key):
-            pass
-
-        GenerativeModel = _Model
-
-    return _Genai
+def _fake(monkeypatch, text):
+    monkeypatch.setattr(
+        ai_service.gemini_client,
+        "generate_text",
+        lambda prompt, api_key, json_mode=False, model=None: text,
+    )
 
 
 def _analyze(monkeypatch, payload):
-    monkeypatch.setattr(ai_service, "genai", _fake_genai(json.dumps(payload, ensure_ascii=False)))
+    _fake(monkeypatch, json.dumps(payload, ensure_ascii=False))
     return ai_service.get_ai_analysis(
         symbol="FPT",
         current_price=74500,
@@ -89,15 +76,23 @@ class TestKetQuaPhanTich:
         assert not FORBIDDEN & set(result)
 
     def test_mo_hinh_tra_rac_khong_lam_vo(self, monkeypatch):
-        monkeypatch.setattr(ai_service, "genai", _fake_genai("khong phai json"))
+        _fake(monkeypatch, "khong phai json")
         result = ai_service.get_ai_analysis("FPT", 74500, {}, "", "", api_key="fake")
         assert result["error"] == "api_error"
         assert not FORBIDDEN & set(result)
 
+    def test_thieu_thu_vien_gemini_chi_bao_loi_khong_sap(self, monkeypatch):
+        # Trước đây ai_service import thẳng SDK: thiếu thư viện là cả backend không
+        # khởi động. Giờ chỉ riêng phần AI báo lỗi.
+        monkeypatch.setattr(ai_service.gemini_client, "HAS_SDK", False)
+        result = ai_service.get_ai_analysis("FPT", 74500, {}, "", "", api_key="fake")
+        assert result["error"] == "api_error"
+        assert "google-generativeai" in result["error_detail"]
+
 
 class TestChat:
     def test_cau_tra_loi_chat_bi_loc_phan_quyet(self, monkeypatch):
-        monkeypatch.setattr(ai_service, "genai", _fake_genai("P/E của FPT là 15,5. Bạn nên mua ngay."))
+        _fake(monkeypatch, "P/E của FPT là 15,5. Bạn nên mua ngay.")
         answer = ai_service.chat_about_stock("FPT", "Có nên mua không?", "tóm tắt", api_key="fake")
         assert "nên mua" not in answer
         assert "P/E của FPT là 15,5." in answer
@@ -105,5 +100,5 @@ class TestChat:
 
     def test_loi_tu_choi_khuyen_nghi_duoc_giu_nguyen(self, monkeypatch):
         text = "Tôi không đưa khuyến nghị mua hay bán. P/E hiện là 15,5."
-        monkeypatch.setattr(ai_service, "genai", _fake_genai(text))
+        _fake(monkeypatch, text)
         assert ai_service.chat_about_stock("FPT", "Có nên mua?", "tóm tắt", api_key="fake") == text

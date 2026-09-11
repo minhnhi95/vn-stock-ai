@@ -1,11 +1,11 @@
-import google.generativeai as genai
 import json
-import os
+
+import gemini_client
 
 from verdict_guard import FILTER_NOTE, clean_fields, strip_verdicts
 
-# Model có thể override qua env var để dễ thử nghiệm/giảm chi phí.
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Model đặt qua biến môi trường GEMINI_MODEL — xem gemini_client.
+GEMINI_MODEL = gemini_client.GEMINI_MODEL
 
 # Các trường AI được phép trả về. Cố ý KHÔNG có recommendation, confidence,
 # target_price hay stop_loss: người mới thấy "MUA MẠNH — độ tin cậy 85%" sẽ làm
@@ -124,7 +124,7 @@ def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history
     Trả về các đoạn giải thích + rủi ro + câu hỏi tự kiểm tra. Không có khuyến
     nghị, độ tin cậy, giá mục tiêu hay mức cắt lỗ — xem sanitize_analysis.
     """
-    active_key = api_key or os.getenv("GEMINI_API_KEY")
+    active_key = gemini_client.resolve_key(api_key)
 
     if not active_key:
         return _error_result(
@@ -150,21 +150,14 @@ def get_ai_analysis(symbol: str, current_price: float, indicators: dict, history
     )
 
     try:
-        genai.configure(api_key=active_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"}
-        )
-        return sanitize_analysis(json.loads(response.text.strip()))
+        text = gemini_client.generate_text(prompt, active_key, json_mode=True)
+        return sanitize_analysis(json.loads(text))
     except Exception as e:
         print(f"Error invoking Gemini API (structured mode): {e}")
 
     try:
-        genai.configure(api_key=active_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content(prompt)
-        return sanitize_analysis(json.loads(_strip_json_fence(response.text)))
+        text = gemini_client.generate_text(prompt, active_key)
+        return sanitize_analysis(json.loads(_strip_json_fence(text)))
     except Exception as err:
         err_msg = str(err)
         lowered = err_msg.lower()
@@ -189,14 +182,11 @@ def guard_chat_answer(text: str) -> str:
 
 
 def chat_about_stock(symbol: str, message: str, chart_data_summary: str, api_key: str):
-    active_key = api_key or os.getenv("GEMINI_API_KEY")
+    active_key = gemini_client.resolve_key(api_key)
     if not active_key:
         return "Vui lòng nhập Gemini API Key để hỏi AI."
 
     try:
-        genai.configure(api_key=active_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
-
         prompt = f"""
         Bạn đang giúp một người MỚI tìm hiểu chứng khoán hiểu về cổ phiếu {symbol}.
 
@@ -214,7 +204,6 @@ def chat_about_stock(symbol: str, message: str, chart_data_summary: str, api_key
         - Chỉ dùng số liệu có trong dữ liệu trên; không bịa.
         """
 
-        response = model.generate_content(prompt)
-        return guard_chat_answer(response.text.strip())
+        return guard_chat_answer(gemini_client.generate_text(prompt, active_key))
     except Exception as e:
         return f"Lỗi khi gửi câu hỏi đến AI: {str(e)}"

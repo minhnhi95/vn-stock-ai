@@ -29,13 +29,11 @@ try:
 except ImportError:
     HAS_COMPANY = False
 
-try:
-    import google.generativeai as genai
-    HAS_GENAI = True
-except ImportError:
-    HAS_GENAI = False
+import gemini_client
 
-EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
+HAS_GENAI = gemini_client.is_available()
+
+EMBED_MODEL = gemini_client.EMBED_MODEL
 _embedding_cache: Dict[str, List[float]] = {}
 _embedding_lock = threading.Lock()
 # Lưu lại tất cả news đã ingest cho semantic search (in-memory).
@@ -209,13 +207,7 @@ def _embed_text(text: str, api_key: Optional[str]) -> Optional[List[float]]:
             return _embedding_cache[cache_key]
 
     try:
-        genai.configure(api_key=key)
-        result = genai.embed_content(
-            model=EMBED_MODEL,
-            content=text_norm,
-            task_type="retrieval_document",
-        )
-        vec = result.get("embedding") if isinstance(result, dict) else getattr(result, "embedding", None)
+        vec = gemini_client.embed_text(text_norm, key)
         if vec is None:
             return None
         with _embedding_lock:

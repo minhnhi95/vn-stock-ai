@@ -42,14 +42,11 @@ try:
 except ImportError:
     HAS_VNSTOCK = False
 
-try:
-    import google.generativeai as genai
-    HAS_GENAI = True
-except ImportError:
-    HAS_GENAI = False
+import gemini_client
+
+HAS_GENAI = gemini_client.is_available()
 
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 REVIEW_TTL_SECONDS = 600.0  # 10 phút — review tốn nhiều call, cache khá lâu
 SECTOR_TTL_SECONDS = 86400.0  # 1 ngày — sector hiếm khi đổi
 HISTORY_TTL_SECONDS = 1800.0  # 30 phút cho chuỗi close làm correlation
@@ -680,7 +677,7 @@ def review_portfolio(api_key: Optional[str] = None) -> Dict[str, Any]:
     metrics = _compute_metrics(portfolio)
     metrics["portfolio_source"] = source
 
-    active_key = (api_key or os.getenv("GEMINI_API_KEY") or "").strip()
+    active_key = gemini_client.resolve_key(api_key)
 
     base = _base_review(metrics)
 
@@ -697,17 +694,8 @@ def review_portfolio(api_key: Optional[str] = None) -> Dict[str, Any]:
     # mode từ chối schema).
     for use_mime in (True, False):
         try:
-            genai.configure(api_key=active_key)
-            model = genai.GenerativeModel(GEMINI_MODEL)
-            if use_mime:
-                response = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "application/json"},
-                )
-                parsed = json.loads(response.text.strip())
-            else:
-                response = model.generate_content(prompt)
-                parsed = json.loads(_strip_json_fence(response.text))
+            text = gemini_client.generate_text(prompt, active_key, json_mode=use_mime)
+            parsed = json.loads(text if use_mime else _strip_json_fence(text))
             break
         except Exception as e:
             errors.append(str(e))

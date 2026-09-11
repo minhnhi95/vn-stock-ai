@@ -106,24 +106,11 @@ class TestReviewPortfolio:
             "rui_ro_chinh": ["Ngân hàng chiếm 80% danh mục.", "Nên chốt lời VCB."],
         }
 
-        class _Response:
-            text = json.dumps(payload, ensure_ascii=False)
-
-        class _Model:
-            def __init__(self, name):
-                pass
-
-            def generate_content(self, prompt, generation_config=None):
-                return _Response()
-
-        class _Genai:
-            @staticmethod
-            def configure(api_key):
-                pass
-
-            GenerativeModel = _Model
-
-        monkeypatch.setattr(prs, "genai", _Genai, raising=False)
+        monkeypatch.setattr(
+            prs.gemini_client,
+            "generate_text",
+            lambda prompt, api_key, json_mode=False, model=None: json.dumps(payload, ensure_ascii=False),
+        )
         monkeypatch.setattr(prs, "HAS_GENAI", True)
         review = prs.review_portfolio(api_key="fake")
         assert not FORBIDDEN & set(review)
