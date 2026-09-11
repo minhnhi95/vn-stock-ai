@@ -14,7 +14,7 @@ phải lời khuyên của chuyên gia tư vấn đầu tư có giấy phép.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------- Ngưỡng, đặt ở đầu file để dễ soi và dễ chỉnh ----------
 
@@ -334,11 +334,46 @@ def build_verdict(
     }
 
 
-def verdict_for(symbol: str, vn100: Optional[set] = None) -> Dict[str, Any]:
+def resolve_sector(
+    symbol: str, bench: Dict[str, Any], sector_of: Optional[Dict[str, str]] = None
+) -> Tuple[Optional[str], Optional[Dict[str, Dict[str, Any]]]]:
+    """
+    Ngành để so trung vị: trước hết theo bảng trung vị, rồi theo ngành ICB của mã.
+
+    Bảng trung vị chỉ liệt kê mã đã dùng để tính (top thanh khoản mỗi ngành + VN100).
+    Một mã nhỏ ngoài danh sách đó vẫn thuộc một ngành có trung vị — không so với ngành
+    thì tiêu chí định giá luôn "thiếu dữ liệu", và mã đó gần như không bao giờ đủ 2/3
+    tiêu chí nền tảng dù doanh nghiệp tốt.
+    """
+    sectors = bench.get("sectors") or {}
+    sector = (bench.get("symbol_sector") or {}).get(symbol)
+    if sector:
+        return sector, (sectors.get(sector) or {}).get("metrics")
+    icb = (sector_of or {}).get(symbol)
+    if icb and icb in sectors:
+        return icb, sectors[icb].get("metrics")
+    return icb, None
+
+
+def _icb_sector_map() -> Dict[str, str]:
+    try:
+        from sector_service import get_industries
+
+        return {s: i["name"] for i in get_industries() for s in (i.get("symbols") or [])}
+    except Exception:
+        return {}
+
+
+def verdict_for(
+    symbol: str,
+    vn100: Optional[set] = None,
+    sector_of: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     """
     Lấy dữ liệu thật rồi tính kết luận. Tách khỏi build_verdict để test không gọi mạng.
 
-    `vn100` truyền sẵn khi quét nhiều mã (jobs/verdict_scan.py) để khỏi lấy lại mỗi mã.
+    `vn100` và `sector_of` (mã -> ngành ICB) truyền sẵn khi quét nhiều mã
+    (jobs/verdict_scan.py) để khỏi lấy lại mỗi mã.
     """
     from market_service import fetch_fundamentals
     from metric_explainer import load_benchmarks
@@ -370,8 +405,9 @@ def verdict_for(symbol: str, vn100: Optional[set] = None) -> Dict[str, Any]:
     safety = screen_symbol(symbol, df=df, fundamentals=fundamentals, vn100=vn100)
 
     bench = load_benchmarks()
-    sector = (bench.get("symbol_sector") or {}).get(symbol)
-    stats = ((bench.get("sectors") or {}).get(sector) or {}).get("metrics") if sector else None
+    if sector_of is None and symbol not in (bench.get("symbol_sector") or {}):
+        sector_of = _icb_sector_map()
+    sector, stats = resolve_sector(symbol, bench, sector_of)
     result = build_verdict(symbol, df, fundamentals, safety, sector, stats)
     # Thiếu chỉ số cơ bản thì kết luận không bao giờ lên "có thể mua" (cần 2/3 tiêu chí
     # nền tảng), nhưng người dùng cần biết đó là do thiếu dữ liệu chứ không phải do

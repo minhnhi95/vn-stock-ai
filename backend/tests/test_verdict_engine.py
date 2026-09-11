@@ -184,3 +184,20 @@ class TestGia:
 
     def test_khong_co_gia_thi_de_trong(self):
         assert ve.build_verdict("X", None, GOOD_F, _safety(), None, STATS)["price"] is None
+
+
+class TestNganhDeSo:
+    BENCH = {
+        "sectors": {"Ngân hàng": {"metrics": {"pe": {"median": 8.0}}}, "Xây dựng": {"metrics": {"pe": {"median": 12.0}}}},
+        "symbol_sector": {"ACB": "Ngân hàng"},
+    }
+
+    def test_uu_tien_bang_trung_vi(self):
+        assert ve.resolve_sector("ACB", self.BENCH, {"ACB": "Xây dựng"}) == ("Ngân hàng", {"pe": {"median": 8.0}})
+
+    def test_ma_nho_ngoai_bang_dung_nganh_icb(self):
+        assert ve.resolve_sector("CTD", self.BENCH, {"CTD": "Xây dựng"})[1] == {"pe": {"median": 12.0}}
+
+    def test_nganh_khong_co_trung_vi_thi_chi_giu_ten(self):
+        assert ve.resolve_sector("XYZ", self.BENCH, {"XYZ": "Hàng không"}) == ("Hàng không", None)
+        assert ve.resolve_sector("XYZ", self.BENCH, None) == (None, None)

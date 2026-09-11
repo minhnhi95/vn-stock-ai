@@ -153,7 +153,7 @@ cd frontend && npm run lint
 | Nhóm | Mô tả |
 | --- | --- |
 | Biểu đồ | 3 khung đồng bộ: nến + EMA20/50/200 + khối lượng, RSI(14) có mốc 30/70, MACD; crosshair chung, ô đọc OHLC theo con trỏ; giá cập nhật 5s trong phiên |
-| **Kết luận mua / không mua** | "Có thể cân nhắc mua / Chờ thêm / Không nên mua" cho mã đang xem, và **tự quét cả rổ** mỗi ngày giao dịch (VN100 + mã đang giữ + mã đặt cảnh báo), từ quy tắc công khai: an toàn, xu hướng (EMA50/EMA200, RSI), định giá và sinh lời so với ngành. Kèm từng tiêu chí đạt/trượt và tỷ lệ quy tắc từng đúng 20 phiên sau trong 2 năm qua, so với mọi phiên |
+| **Kết luận mua / không mua** | "Có thể cân nhắc mua / Chờ thêm / Không nên mua" cho mã đang xem, và **tìm mã đáng mua toàn thị trường** mỗi ngày giao dịch (lọc thanh khoản cả sàn rồi chấm từng mã, lọc theo ngành / sàn), từ quy tắc công khai: an toàn, xu hướng (EMA50/EMA200, RSI), định giá và sinh lời so với ngành. Kèm từng tiêu chí đạt/trượt và tỷ lệ quy tắc từng đúng 20 phiên sau trong 2 năm qua, so với mọi phiên |
 | **Kiểm tra an toàn** | 6 tiêu chí ngưỡng cứng (thanh khoản, thị giá, nợ/vốn chủ, ROE, biên độ, rổ VN100). Chỉ chặn mã rủi ro, **không** gợi ý mã tốt. Quét được nhiều mã một lượt |
 | **Cơ bản có giải thích** | 13 chỉ số, mỗi chỉ số kèm một câu tiếng Việt đời thường ("Bạn trả 15,53 đồng để mua 1 đồng lợi nhuận mỗi năm"), trung vị cùng ngành để đối chiếu, và trường hợp con số đó đánh lừa |
 | Tin tức | Tin theo mã + tìm kiếm ngữ nghĩa |
@@ -219,17 +219,31 @@ Mở app Antigravity, đăng nhập lại, rồi chạy thử bằng tay:
 ```powershell
 .\run_daily_brief.bat
 ```
-## Quét kết luận cả rổ
+## Tìm mã đáng mua toàn thị trường
 
-Job `jobs/verdict_scan.py` chạy đúng quy tắc của `verdict_engine.py` cho mã đang giữ,
-mã đang đặt cảnh báo và rổ VN100 (theo thứ tự đó), rồi ghi vào bảng `verdict_scan`
-trong DB. Panel **Kết luận cả rổ** ở tab Thị trường đọc ra: số mã mỗi loại, mã vừa đổi
-kết luận so với phiên trước, mã đang giữ, và từng danh sách. Mỗi dòng ghi rõ quy tắc
-từng đúng hơn, ngang hay kém chọn bừa với chính mã đó. Bấm vào mã để xem từng tiêu chí.
+Job `jobs/verdict_scan.py` chạy quy tắc của `verdict_engine.py` cho cả thị trường, qua
+hai vòng vì vnstock free tier chỉ cho 20 request/phút:
 
-Mỗi mã tốn khoảng 3 request vnstock nên job nghỉ 9 giây giữa các mã; một lượt khoảng
-110 mã mất 20-25 phút. Mã lỗi hoặc thiếu chỉ số cơ bản được thử lại một lần sau một
-phút. Quét được dưới một nửa số mã thì không ghi, giữ nguyên lượt cũ.
+1. **Lọc rẻ.** Lấy danh sách mọi cổ phiếu đang niêm yết (HOSE, HNX, UPCoM; bỏ chứng
+   quyền, ETF, trái phiếu) và bảng giá phiên gần nhất — 80 mã mỗi request, cả sàn mất
+   khoảng 2 phút. Loại mã không khớp lệnh, giá dưới 10.000 đ, hoặc giao dịch dưới 2 tỷ
+   ở phiên gần nhất: những mã này đằng nào cũng trượt bộ lọc an toàn. Đo ngày 12/09/2026:
+   1.524 cổ phiếu đang niêm yết, 97 mã ngoài VN100 qua vòng lọc.
+2. **Chấm kết luận** cho mã qua vòng lọc, cộng mã đang giữ, mã đặt cảnh báo và VN100
+   (nhóm này luôn được chấm). Mỗi mã cách nhau 9 giây; khoảng 200 mã, cả lượt 30-40 phút. Mã nhỏ
+   ngoài bảng trung vị vẫn được so định giá với trung vị đúng ngành ICB của nó.
+
+Mã lỗi hoặc thiếu chỉ số cơ bản được thử lại một lần sau một phút. Quét được dưới một
+nửa số mã thì không ghi, giữ nguyên lượt cũ. Số mã bị loại ở vòng lọc và lý do được
+lưu kèm, hiện ngay trên giao diện.
+
+Kết quả ghi vào bảng `verdict_scan` trong DB. Trên giao diện:
+
+- nút **Tìm mã** (thanh đầu trang) mở danh sách đầy đủ, lọc theo kết luận, ngành, sàn,
+  "chỉ mã mà quy tắc từng đúng hơn chọn bừa", tìm theo mã, sắp theo độ đáng tin của
+  quy tắc hoặc theo giá trị giao dịch;
+- panel **Kết luận toàn thị trường** ở tab Thị trường: số mã mỗi loại, mã vừa đổi kết
+  luận so với phiên trước, mã đang giữ, mã có thể cân nhắc mua.
 
 **Chạy tự động.** Task Scheduler có task **"VN Stock - Quet ket luan"**, chạy 15:30 từ
 thứ Hai đến thứ Sáu (`run_verdict_scan.bat auto`), sau giờ đóng cửa để dùng giá đóng
@@ -237,8 +251,11 @@ cửa của phiên đó. Log ở `backend/logs/verdict_scan.log`. Chạy tay:
 
 ```powershell
 .\run_verdict_scan.bat
+cd backend
+# Chỉ VN100 + mã quan tâm, nhanh hơn (~15 phút):
+..\.venv\Scripts\python -m jobs.verdict_scan --universe vn100
 # Thử vài mã, chỉ in, không ghi vào DB:
-cd backend; ..\.venv\Scripts\python -m jobs.verdict_scan --symbols FPT VNM
+..\.venv\Scripts\python -m jobs.verdict_scan --symbols FPT VNM
 ```
 
 Cảnh báo **"Kết luận: Có thể cân nhắc mua"** / **"Kết luận: Không nên mua"** đọc lượt
@@ -359,7 +376,7 @@ backend/
   jobs/price_reaction.py      # đo "thị trường đã phản ánh tin chưa"
   jobs/daily_brief.py         # ghép tất cả -> bản tin, lưu vào DB
   jobs/sector_benchmarks.py   # trung vị chỉ số theo ngành -> data/sector_benchmarks.json
-  jobs/verdict_scan.py        # quét kết luận cả rổ sau giờ đóng cửa -> DB (verdict_scan)
+  jobs/verdict_scan.py        # tìm mã đáng mua toàn thị trường sau giờ đóng cửa -> DB (verdict_scan)
   data/sector_benchmarks.json # bảng tham chiếu, đi kèm mã nguồn (chỉ đọc lúc chạy)
   search_service.py           # index mã niêm yết cho ô tìm kiếm
   broker_import_service.py    # parse sao kê CSV của công ty chứng khoán

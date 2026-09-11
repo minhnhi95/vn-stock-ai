@@ -16,6 +16,7 @@ import SafetyCheck from './components/SafetyCheck';
 import VerdictCard from './components/VerdictCard';
 import VerdictScan from './components/VerdictScan';
 const SafetyScreenModal = lazy(() => import('./components/SafetyScreenModal'));
+const MarketFinder = lazy(() => import('./components/MarketFinder'));
 import AlertsManager from './components/AlertsManager';
 import CalendarPanel from './components/CalendarPanel';
 import InsiderPanel from './components/InsiderPanel';
@@ -83,6 +84,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
 
   const [showSafetyScreen, setShowSafetyScreen] = useState(false);
+  const [showFinder, setShowFinder] = useState(false);
   const [showPortfolioReview, setShowPortfolioReview] = useState(false);
 
   // Fetch search results on mount or query change
@@ -120,6 +122,7 @@ export default function App() {
   // Modal lọc an toàn dựng inline ở đây (không phải component riêng) nên gắn
   // Escape-to-close tại App. Hai modal còn lại tự gọi hook trong file của chúng.
   const closeSafetyScreen = useCallback(() => setShowSafetyScreen(false), []);
+  const closeFinder = useCallback(() => setShowFinder(false), []);
   useModalDismiss(showSafetyScreen, closeSafetyScreen);
 
   // Tiêu đề tab bám theo mã + giá — người dùng thường mở nhiều tab cho nhiều mã,
@@ -378,6 +381,15 @@ export default function App() {
 
           <button
             className="btn btn-outline header-btn"
+            onClick={() => setShowFinder(true)}
+            title="Tìm mã đáng mua toàn thị trường"
+          >
+            <Search size={14} />
+            <span className="header-btn-label">Tìm mã</span>
+          </button>
+
+          <button
+            className="btn btn-outline header-btn"
             onClick={() => setShowSafetyScreen(true)}
             title="Kiểm tra an toàn nhiều mã"
           >
@@ -441,6 +453,7 @@ export default function App() {
           <div className="panel-slot" data-tab="market">
             <ErrorBoundary name="Kết luận cả rổ">
               <VerdictScan
+                onOpenFinder={() => setShowFinder(true)}
                 apiBase={API_BASE}
                 onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
               />
@@ -653,6 +666,15 @@ export default function App() {
             apiBase={API_BASE}
             open={showSafetyScreen}
             onClose={closeSafetyScreen}
+            onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
+          />
+        ) : null}
+
+        {showFinder ? (
+          <MarketFinder
+            apiBase={API_BASE}
+            open={showFinder}
+            onClose={closeFinder}
             onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
           />
         ) : null}
