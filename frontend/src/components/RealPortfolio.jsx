@@ -198,7 +198,7 @@ export default function RealPortfolio({ apiBase }) {
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={(e) => handleFile(e.target.files?.[0])}
             hidden
           />
@@ -209,7 +209,7 @@ export default function RealPortfolio({ apiBase }) {
             disabled={importing}
           >
             <Upload size={13} />
-            <span>{importing ? 'Đang đọc file...' : 'Nhập sao kê CSV'}</span>
+            <span>{importing ? 'Đang đọc file...' : 'Nhập sao kê (CSV / Excel)'}</span>
           </button>
           <button type="button" className="rp-mini-btn" onClick={() => setShowForm((v) => !v)}>
             <Plus size={11} />
@@ -301,8 +301,8 @@ export default function RealPortfolio({ apiBase }) {
           <div className="rp-empty">
             {data?.reason || 'Chưa có giao dịch nào.'}
             <div className="rp-empty-hint">
-              Tải file sao kê giao dịch từ app/web công ty chứng khoán (xuất CSV), hoặc
-              nhập tay từng lệnh.
+              Tải file sao kê giao dịch xuất từ app hoặc web công ty chứng khoán (CSV
+              hoặc Excel .xlsx), hoặc nhập tay từng lệnh.
             </div>
           </div>
         ) : data ? (

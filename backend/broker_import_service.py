@@ -152,6 +152,49 @@ def _detect_columns(headers: List[str]) -> Dict[str, Optional[int]]:
     return {field: _match_column(folded, hints) for field, hints in _COLUMN_HINTS.items()}
 
 
+def _read_xlsx(content: bytes) -> List[List[str]]:
+    """
+    Đọc sao kê Excel. Phần lớn công ty chứng khoán xuất .xlsx, nên bắt người dùng tự
+    chuyển sang CSV là thêm một bước dễ sai (Excel tiếng Việt hay lưu CSV mã ANSI).
+
+    Chỉ lấy sheet đầu tiên: sao kê giao dịch thường nằm ở đó, các sheet sau là chú thích.
+    Số và ngày giữ nguyên kiểu Excel rồi đưa về chuỗi, để parser dùng chung một đường.
+    """
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        raise ImportError_("Thiếu thư viện đọc Excel. Lưu file sang CSV UTF-8 rồi tải lại.")
+
+    try:
+        workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    except Exception as e:
+        raise ImportError_(
+            f"Không mở được file Excel ({str(e)[:80]}). Nếu file vẫn mở được trên máy, "
+            "hãy 'Save As' → CSV UTF-8 rồi tải lại."
+        )
+
+    rows: List[List[str]] = []
+    try:
+        sheet = workbook[workbook.sheetnames[0]]
+        for raw_row in sheet.iter_rows(values_only=True):
+            cells = []
+            for value in raw_row:
+                if value is None:
+                    cells.append("")
+                elif isinstance(value, datetime):
+                    cells.append(value.strftime("%d/%m/%Y"))
+                else:
+                    cells.append(str(value).strip())
+            if any(c for c in cells):
+                rows.append(cells)
+    finally:
+        workbook.close()
+
+    if not rows:
+        raise ImportError_("File Excel rỗng.")
+    return rows
+
+
 def _read_rows(content: bytes, filename: str = "") -> List[List[str]]:
     """
     Đọc CSV thành list dòng. Tự dò encoding và dấu phân cách.
@@ -159,9 +202,13 @@ def _read_rows(content: bytes, filename: str = "") -> List[List[str]]:
     Sao kê VN hay là UTF-8-BOM hoặc CP1258; dấu phân cách có thể là ',' ';' hoặc
     tab (Excel bản tiếng Việt mặc định ';').
     """
-    if filename.lower().endswith((".xlsx", ".xls")):
+    lower = filename.lower()
+    if lower.endswith(".xlsx"):
+        return _read_xlsx(content)
+    if lower.endswith(".xls"):
+        # .xls là định dạng Excel 97, cần thư viện khác (xlrd). Hiếm gặp ở sao kê mới.
         raise ImportError_(
-            "Chưa hỗ trợ đọc trực tiếp Excel. Mở file rồi 'Save As' → CSV UTF-8 và tải lại."
+            "File .xls đời cũ chưa đọc được. Mở file rồi 'Save As' → Excel (.xlsx) hoặc CSV UTF-8."
         )
 
     text = None

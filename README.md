@@ -159,7 +159,7 @@ cd frontend && npm run lint
 | **Cơ bản có giải thích** | 13 chỉ số, mỗi chỉ số kèm một câu tiếng Việt đời thường ("Bạn trả 15,53 đồng để mua 1 đồng lợi nhuận mỗi năm"), trung vị cùng ngành để đối chiếu, và trường hợp con số đó đánh lừa |
 | Tin tức | Tin theo mã + tìm kiếm ngữ nghĩa |
 | AI giải thích | Đọc giúp chỉ báo kỹ thuật, chỉ số cơ bản, tin tức và khối ngoại của một mã bằng tiếng Việt: dữ liệu nói gì, chỗ nào mâu thuẫn, rủi ro, câu hỏi để tự trả lời. **Không** nhãn MUA/BÁN, độ tin cậy hay giá mục tiêu; câu mang tính chỉ dẫn bị lọc (`verdict_guard.py`) |
-| **Danh mục thật** | Nhập sao kê CSV từ công ty chứng khoán → vị thế, giá vốn FIFO, lãi/lỗ **đã trừ phí và thuế TNCN 0,1%**, thống kê chi phí giao dịch |
+| **Danh mục thật** | Nhập sao kê CSV/Excel từ công ty chứng khoán → vị thế, giá vốn FIFO, lãi/lỗ **đã trừ phí và thuế TNCN 0,1%**, thống kê chi phí giao dịch |
 | Khối ngoại | Mua/bán ròng theo mã (khối lượng + VND) và xếp hạng toàn VN100 |
 | Toàn cảnh thị trường | Heatmap ngành theo mã đại diện VN100, khối ngoại mua/bán ròng |
 | Theo dõi | Cảnh báo giá / RSI / EMA cắt / **có tin mới** / **kết luận thành "có thể cân nhắc mua" hoặc "không nên mua"**, tự kiểm tra + thông báo trình duyệt; một nút bật báo tin cho toàn bộ danh mục thật; lịch sự kiện; giao dịch nội bộ |
@@ -358,9 +358,13 @@ App **không kết nối tới tài khoản chứng khoán hay ngân hàng** và
 Nó chỉ ghi nhận những lệnh đã khớp để tính lãi/lỗ cho đúng.
 
 Cách dùng:
-1. Vào app/web công ty chứng khoán, xuất lịch sử giao dịch ra **CSV**.
-2. Panel "Danh mục thật" → *Nhập sao kê CSV*. Parser tự dò cột nên không cần
-   sửa file; dòng nào không đọc được sẽ được liệt kê kèm lý do thay vì bỏ im lặng.
+1. Vào app/web công ty chứng khoán, xuất lịch sử giao dịch ra **CSV hoặc Excel
+   (.xlsx)**. Không công ty chứng khoán nào ở Việt Nam mở API cho nhà đầu tư cá nhân
+   (OCBS, LPBS đều không có), nên đây là đường kết nối duy nhất không phải giao mật
+   khẩu cho bên thứ ba.
+2. Panel "Danh mục thật" → *Nhập sao kê (CSV / Excel)*. Parser tự dò cột theo từ khoá
+   tiếng Việt nên không cần sửa file; dòng nào không đọc được sẽ được liệt kê kèm lý do
+   thay vì bỏ im lặng. File .xls đời cũ thì lưu lại thành .xlsx.
 3. Nhập lại file trùng kỳ cũng không sinh bản ghi trùng (khoá theo ngày + mã +
    loại lệnh + khối lượng + giá).
 
@@ -410,7 +414,7 @@ backend/
   jobs/verdict_scan.py        # tìm mã đáng mua trên sàn HOSE sau giờ đóng cửa -> DB (verdict_scan)
   data/sector_benchmarks.json # bảng tham chiếu, đi kèm mã nguồn (chỉ đọc lúc chạy)
   search_service.py           # index mã niêm yết cho ô tìm kiếm
-  broker_import_service.py    # parse sao kê CSV của công ty chứng khoán
+  broker_import_service.py    # parse sao kê CSV/Excel của công ty chứng khoán
   real_portfolio_service.py   # FIFO + phí + thuế -> lãi/lỗ danh mục thật
   news_service.py  foreign_service.py  sector_service.py
   alerts_service.py  calendar_service.py  insider_service.py

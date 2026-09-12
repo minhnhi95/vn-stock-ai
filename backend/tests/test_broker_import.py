@@ -170,7 +170,7 @@ class TestParseBrokerCsv:
         with pytest.raises(ImportError_):
             parse_broker_csv(b"", "x.csv")
 
-    def test_excel_duoc_huong_dan_chuyen_csv(self):
+    def test_file_xlsx_hong_thi_huong_dan_chuyen_csv(self):
         with pytest.raises(ImportError_, match="CSV"):
             parse_broker_csv(b"PK\x03\x04", "sao_ke.xlsx")
 
@@ -210,3 +210,43 @@ class TestBuildManualRecord:
     def test_input_sai_bi_tu_choi(self, kwargs):
         with pytest.raises(ImportError_):
             build_manual_record(**kwargs)
+
+
+class TestFileExcel:
+    """Sao kê của công ty chứng khoán phần lớn xuất .xlsx, đọc thẳng khỏi phải đổi sang CSV."""
+
+    def _xlsx(self, rows):
+        import io as _io
+
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        for row in rows:
+            ws.append(row)
+        buf = _io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def test_doc_duoc_sao_ke_xlsx(self):
+        from datetime import datetime
+
+        content = self._xlsx(
+            [
+                ["SAO KÊ GIAO DỊCH CHỨNG KHOÁN"],  # dòng tiêu đề trước bảng thật
+                ["Ngày giao dịch", "Mã CK", "Loại GD", "Khối lượng", "Giá khớp", "Phí"],
+                [datetime(2026, 9, 10), "FPT", "Mua", 300, 72700, 32715],
+                ["11/09/2026", "DHC", "Bán", 500, 35750, 26812],
+            ]
+        )
+        result = parse_broker_csv(content, filename="saoke.xlsx")
+        rows = result["records"]
+        assert [r["symbol"] for r in rows] == ["FPT", "DHC"]
+        assert rows[0]["date"] == "2026-09-10" and rows[0]["side"] == "BUY"
+        assert rows[1]["side"] == "SELL" and rows[1]["quantity"] == 500
+        # Bán thì phải có thuế 0,1% dù file không tách cột thuế.
+        assert rows[1]["tax"] > 0
+
+    def test_file_xls_doi_cu_bao_ro(self):
+        with pytest.raises(ImportError_, match="xls"):
+            parse_broker_csv(b"rac", filename="saoke.xls")
