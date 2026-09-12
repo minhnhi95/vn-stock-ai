@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Target, RefreshCw, Check, X, HelpCircle, History } from 'lucide-react';
+import { fmtDay } from './verdictScanUtils';
 
 /**
  * Kết luận có thể cân nhắc mua / chờ thêm / không nên mua cho mã đang xem.
@@ -19,13 +20,30 @@ const GROUPS = [
 
 export default function VerdictCard({ apiBase, symbol }) {
   const [data, setData] = useState(null);
+  const [quick, setQuick] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Tính đầy đủ một mã mất khoảng 9 giây (tải 2 năm giá + chỉ số cơ bản). Lượt quét đã
+  // có sẵn kết luận của mã này, nên hiện ngay để người dùng không nhìn vào ô trống.
+  const loadQuick = useCallback(async () => {
+    if (!apiBase || !symbol) return;
+    try {
+      const res = await fetch(`${apiBase}/verdict/scan`);
+      const json = await res.json();
+      const row = (json.results || []).find((r) => r.symbol === symbol);
+      if (row) setQuick({ ...row, scan_date: json.scan_date || json.date });
+    } catch {
+      // Chưa có lượt quét thì chỉ mất phần hiện nhanh, bản đầy đủ vẫn đang tính.
+    }
+  }, [apiBase, symbol]);
 
   const load = useCallback(async () => {
     if (!apiBase || !symbol) return;
     setLoading(true);
     setError(null);
+    // Xoá kết quả của mã trước: để nguyên thì thẻ ghi tên mã mới kèm số liệu mã cũ.
+    setData(null);
     try {
       const res = await fetch(`${apiBase}/verdict?symbol=${encodeURIComponent(symbol)}`);
       const json = await res.json();
@@ -40,11 +58,14 @@ export default function VerdictCard({ apiBase, symbol }) {
   }, [apiBase, symbol]);
 
   useEffect(() => {
+    setQuick(null);
+    loadQuick();
     load();
-  }, [load]);
+  }, [loadQuick, load]);
 
   const checks = data?.checks || [];
   const history = data?.history;
+  const shown = data || quick;
 
   return (
     <div className="glass-panel">
@@ -60,14 +81,22 @@ export default function VerdictCard({ apiBase, symbol }) {
 
       <div className="panel-content vd-content">
         {error ? <div className="vd-error">{error}</div> : null}
-        {loading && !data ? <div className="vd-loading">Đang tính kết luận...</div> : null}
+        {loading && !shown ? <div className="vd-loading">Đang tính kết luận...</div> : null}
+
+        {shown ? (
+          <div className={`vd-verdict ${VERDICT_CLASS[shown.verdict] || 'vd-wait'}`}>
+            <span className="vd-label">{shown.label}</span>
+            <span className="vd-headline">{shown.headline}</span>
+            {!data ? (
+              <span className="vd-from-scan">
+                Theo lượt quét phiên {fmtDay(quick?.scan_date)} — đang tính lại chi tiết...
+              </span>
+            ) : null}
+          </div>
+        ) : null}
 
         {data ? (
           <>
-            <div className={`vd-verdict ${VERDICT_CLASS[data.verdict] || 'vd-wait'}`}>
-              <span className="vd-label">{data.label}</span>
-              <span className="vd-headline">{data.headline}</span>
-            </div>
 
             {data.data_gaps?.map((gap) => (
               <div key={gap} className="vd-gap">{gap}</div>
@@ -87,6 +116,25 @@ export default function VerdictCard({ apiBase, symbol }) {
                         <span className="vd-row-label">{c.label}</span>
                         <span className="vd-row-value">{c.display || 'Thiếu dữ liệu'}</span>
                         <span className="vd-row-threshold">Cần: {c.threshold}</span>
+                        {/* Từng tiêu chí an toàn nằm ngay đây, thay cho một panel riêng:
+                            đây là chỗ người dùng xem trước khi mua. */}
+                        {c.details?.length ? (
+                          <ul className="vd-details">
+                            {c.details.map((d) => {
+                              const DetailIcon = STATUS_ICON[d.status] || HelpCircle;
+                              return (
+                                <li key={d.key} className={`vd-${d.status}`}>
+                                  <DetailIcon size={11} className="vd-icon" />
+                                  <span>
+                                    {d.label}
+                                    {d.hard ? null : <i> (điểm trừ, không loại)</i>}
+                                  </span>
+                                  <span className="vd-d-value">{d.display || 'Thiếu dữ liệu'}</span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -183,6 +231,27 @@ export default function VerdictCard({ apiBase, symbol }) {
           color: var(--text-muted);
         }
         .vd-row-threshold { grid-column: 2 / -1; font-size: 10px; color: var(--text-muted); }
+        .vd-from-scan { font-size: 10px; color: var(--text-muted); }
+        .vd-details {
+          grid-column: 1 / -1;
+          list-style: none;
+          margin: 6px 0 0;
+          padding: 6px 0 0;
+          border-top: 1px dashed var(--border-color);
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+        .vd-details li {
+          display: grid;
+          grid-template-columns: 14px 1fr auto;
+          gap: 6px;
+          align-items: center;
+          font-size: 10.5px;
+          color: var(--text-muted);
+        }
+        .vd-details i { font-style: normal; opacity: 0.75; }
+        .vd-d-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
         .vd-pass .vd-icon { color: var(--color-buy); }
         .vd-fail .vd-icon, .vd-fail .vd-row-value { color: var(--color-sell); }
         .vd-unknown .vd-icon { color: var(--text-muted); }

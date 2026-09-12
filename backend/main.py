@@ -74,6 +74,13 @@ except Exception as _e:
     _VERDICT_OK = False
 
 try:
+    from trade_plan import DEFAULT_RISK_PCT, plan_for
+    _PLAN_OK = True
+except Exception as _e:
+    print(f"[trade_plan] unavailable: {_e}")
+    _PLAN_OK = False
+
+try:
     from alerts_service import (
         create_alert,
         list_alerts,
@@ -219,6 +226,7 @@ def health():
             "real_portfolio": _REAL_OK,
             "safety_screen": _SAFETY_OK,
             "verdict": _VERDICT_OK,
+            "trade_plan": _PLAN_OK,
         },
     }
 
@@ -870,6 +878,21 @@ if _REAL_OK:
 
 class SafetyScreenRequest(BaseModel):
     symbols: Optional[List[str]] = None
+
+
+if _PLAN_OK:
+    @app.get("/api/trade-plan")
+    def api_trade_plan(symbol: str, capital: float, risk_pct: float = DEFAULT_RISK_PCT):
+        """Mua bao nhiêu cổ phiếu, cắt lỗ ở đâu, mất tối đa bao nhiêu — xem trade_plan."""
+        symbol = symbol.strip().upper()
+        if not is_vn_stock(symbol):
+            raise HTTPException(status_code=400, detail="Mã không hợp lệ.")
+        if capital <= 0:
+            raise HTTPException(status_code=400, detail="Vốn phải lớn hơn 0.")
+        try:
+            return plan_for(symbol, capital=capital, risk_pct=risk_pct)
+        except (SystemExit, Exception) as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi tính kế hoạch: {str(e)[:200]}")
 
 
 if _VERDICT_OK:

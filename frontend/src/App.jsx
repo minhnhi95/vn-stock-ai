@@ -12,8 +12,8 @@ import useModalDismiss from './hooks/useModalDismiss';
 
 import MarketPanel from './components/MarketPanel';
 import DailyBrief from './components/DailyBrief';
-import SafetyCheck from './components/SafetyCheck';
 import VerdictCard from './components/VerdictCard';
+import TradePlan from './components/TradePlan';
 import VerdictScan from './components/VerdictScan';
 const SafetyScreenModal = lazy(() => import('./components/SafetyScreenModal'));
 const MarketFinder = lazy(() => import('./components/MarketFinder'));
@@ -449,8 +449,9 @@ export default function App() {
         {/* Column 1: Search, Watchlist, & Manual Trading Panel */}
         <section className="column">
           <div className="panel-slot" data-tab="market">
-  <ErrorBoundary name="Bản tin sáng nay">
-              <DailyBrief
+            <ErrorBoundary name="Kết luận cả rổ">
+              <VerdictScan
+                onOpenFinder={() => setShowFinder(true)}
                 apiBase={API_BASE}
                 onSelectSymbol={openStock}
               />
@@ -458,9 +459,8 @@ export default function App() {
           </div>
 
           <div className="panel-slot" data-tab="market">
-            <ErrorBoundary name="Kết luận cả rổ">
-              <VerdictScan
-                onOpenFinder={() => setShowFinder(true)}
+  <ErrorBoundary name="Bản tin sáng nay">
+              <DailyBrief
                 apiBase={API_BASE}
                 onSelectSymbol={openStock}
               />
@@ -548,8 +548,8 @@ export default function App() {
           </div>
 
           <div className="panel-slot" data-tab="stock">
-  <ErrorBoundary name="Kiểm tra an toàn">
-              <SafetyCheck apiBase={API_BASE} symbol={selectedStock.symbol} />
+            <ErrorBoundary name="Kế hoạch vào lệnh">
+              <TradePlan apiBase={API_BASE} symbol={selectedStock.symbol} />
             </ErrorBoundary>
           </div>
 

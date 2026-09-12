@@ -154,6 +154,7 @@ cd frontend && npm run lint
 | --- | --- |
 | Biểu đồ | 3 khung đồng bộ: nến + EMA20/50/200 + khối lượng, RSI(14) có mốc 30/70, MACD; crosshair chung, ô đọc OHLC theo con trỏ; giá cập nhật 5s trong phiên |
 | **Kết luận mua / không mua** | "Có thể cân nhắc mua / Chờ thêm / Không nên mua" cho mã đang xem, và **tìm mã đáng mua trên sàn HOSE** mỗi ngày giao dịch (lọc thanh khoản cả sàn rồi chấm từng mã, lọc theo ngành), từ quy tắc công khai: an toàn, xu hướng (EMA50/EMA200, RSI), định giá và sinh lời so với ngành. Kèm từng tiêu chí đạt/trượt và tỷ lệ quy tắc từng đúng 20 phiên sau trong 2 năm qua, so với mọi phiên |
+| **Kế hoạch vào lệnh** | Vốn và mức rủi ro chấp nhận cho mỗi lệnh → số cổ phiếu nên mua, giá cắt lỗ theo ATR14 / đáy 20 phiên (đúng bước giá sàn), tiền mất tối đa đã gồm phí và thuế, mục tiêu chốt lời gấp đôi khoảng cách cắt lỗ |
 | **Kiểm tra an toàn** | 6 tiêu chí ngưỡng cứng (thanh khoản, thị giá, nợ/vốn chủ, ROE, biên độ, rổ VN100). Chỉ chặn mã rủi ro, **không** gợi ý mã tốt. Quét được nhiều mã một lượt |
 | **Cơ bản có giải thích** | 13 chỉ số, mỗi chỉ số kèm một câu tiếng Việt đời thường ("Bạn trả 15,53 đồng để mua 1 đồng lợi nhuận mỗi năm"), trung vị cùng ngành để đối chiếu, và trường hợp con số đó đánh lừa |
 | Tin tức | Tin theo mã + tìm kiếm ngữ nghĩa |
@@ -268,6 +269,29 @@ Cảnh báo **"Kết luận: Có thể cân nhắc mua"** / **"Kết luận: Kh�
 quét mới nhất nên không tốn request nào. Lượt quét cũ hơn 4 ngày bị bỏ qua: máy tắt cả
 tuần thì cảnh báo không bắn một kết luận cũ như thể của hôm nay.
 
+## Kế hoạch vào lệnh
+
+Phần quyết định kết quả đầu tư nhiều hơn cả việc chọn mã: mỗi lệnh bỏ bao nhiêu tiền và
+thoát ở đâu. Tỷ lệ đúng của quy tắc chọn mã, đo trên chính dữ liệu từng mã, hầu hết chỉ
+ngang mức chọn bừa một phiên — còn số tiền mất mỗi lệnh thì quyết định được trước khi mua.
+
+`trade_plan.py` nhận vốn và mức rủi ro chấp nhận, trả về:
+
+- **giá cắt lỗ** = mức thấp hơn giữa "giá trừ 2 lần ATR14" và "đáy 20 phiên", làm tròn
+  xuống đúng bước giá HOSE (10 / 50 / 100 đ) để đặt được lệnh thật;
+- **số cổ phiếu** = (vốn × % rủi ro) ÷ khoảng cách cắt lỗ, làm tròn xuống lô 100, và
+  không để một mã vượt 20% vốn (cắt lỗ gần không giữ được khi giá nhảy gap);
+- **tiền mất nếu chạm cắt lỗ**, đã tính phí mua 0,15%, phí bán 0,15% và thuế bán 0,1%;
+- **mục tiêu chốt lời** ở mức lãi gấp đôi khoảng cách cắt lỗ.
+
+Vốn và mức rủi ro lưu trong `localStorage` của máy người dùng, không vào DB. Kết luận
+của mã lấy từ lượt quét đã lưu (không tính lại, vốn mất ~9 giây mỗi mã), nên thẻ kế
+hoạch và danh sách "Tìm mã" luôn nói cùng một điều.
+
+Thẻ **Kế hoạch vào lệnh** nằm ngay dưới thẻ **Kết luận** ở tab Cổ phiếu. Panel "Kiểm tra
+an toàn" cũ đã bỏ: từng tiêu chí an toàn giờ nằm trong chính thẻ Kết luận, là chỗ người
+dùng xem trước khi mua. Bộ lọc an toàn nhiều mã vẫn còn ở nút "Lọc an toàn".
+
 ## Trung vị ngành cho phần "Cơ bản"
 
 Panel cơ bản so từng chỉ số với trung vị ngành ICB. Bảng trung vị **không tính lúc
@@ -373,6 +397,7 @@ backend/
   storage_service.py          # cảnh báo + giao dịch thật + bản tin (SQLite / Postgres)
   safety_screen.py            # 6 tiêu chí ngưỡng cứng chặn mã rủi ro cho người mới
   verdict_engine.py           # kết luận mua/chờ/không mua từ quy tắc + tỷ lệ đúng quá khứ
+  trade_plan.py               # mua bao nhiêu cp, cắt lỗ ở đâu, mất tối đa bao nhiêu
   metric_explainer.py         # dịch chỉ số cơ bản sang tiếng Việt + so trung vị ngành
   market_universe.py          # rổ VN30/VN100 tĩnh làm fallback
   symbol_utils.py             # nhận dạng mã CK VN (nguồn sự thật duy nhất)

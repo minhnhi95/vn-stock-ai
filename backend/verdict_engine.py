@@ -187,8 +187,8 @@ def _judge_history(verdict: str, history: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _check(key, label, passed, display, threshold, group) -> Dict[str, Any]:
-    return {
+def _check(key, label, passed, display, threshold, group, details=None) -> Dict[str, Any]:
+    row = {
         "key": key,
         "label": label,
         "group": group,
@@ -196,6 +196,9 @@ def _check(key, label, passed, display, threshold, group) -> Dict[str, Any]:
         "display": display,
         "threshold": threshold,
     }
+    if details:
+        row["details"] = details
+    return row
 
 
 def build_verdict(
@@ -230,9 +233,23 @@ def build_verdict(
             "Đạt" if not hard_fail
             else "Trượt: " + ", ".join(c.get("label") or c.get("key") for c in hard_fail)
         )
+    # Kèm từng tiêu chí an toàn với con số của nó: thẻ kết luận là chỗ duy nhất người
+    # dùng xem trước khi mua, không nên bắt họ mở thêm một bảng khác để biết vì sao đạt.
+    safety_details = [
+        {
+            "key": c.get("key"),
+            "label": c.get("label"),
+            "status": c.get("status"),
+            "display": c.get("display"),
+            "threshold": c.get("threshold"),
+            "hard": c.get("key") in HARD_SAFETY_KEYS,
+        }
+        for c in (safety or {}).get("checks", [])
+    ]
     checks.append(_check(
         "safety", "Bộ lọc an toàn", safety_passed, safety_display,
         "Không trượt: thanh khoản, thị giá, ROE, nợ/vốn chủ", "an_toan",
+        details=safety_details,
     ))
 
     # --- 2. Xu hướng giá ---
