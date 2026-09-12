@@ -9,7 +9,12 @@ export default function VerdictRow({ row, onSelect, showMeta = false }) {
     : '';
   return (
     <div className={`vs-row ${VERDICT_CLASS[row.verdict] || ''}`}>
-      <button type="button" className="vs-sym" onClick={() => onSelect?.(row.symbol)} title="Xem từng tiêu chí">
+      <button
+        type="button"
+        className="vs-sym"
+        onClick={() => onSelect?.(row.symbol)}
+        aria-label={`${row.symbol} — xem từng tiêu chí`}
+      >
         {row.symbol}
       </button>
       <div className="vs-main">

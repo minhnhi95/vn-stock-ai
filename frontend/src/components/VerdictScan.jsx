@@ -23,7 +23,7 @@ function Section({ title, rows, onSelect, defaultOpen }) {
         <Icon size={12} />
         {title} ({rows.length})
       </button>
-      {open ? rows.map((row) => <VerdictRow key={row.symbol} row={row} onSelect={onSelect} />) : null}
+      {open ? rows.map((row) => <VerdictRow key={row.symbol} row={row} onSelect={onSelect} showMeta />) : null}
     </div>
   );
 }

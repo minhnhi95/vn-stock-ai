@@ -121,6 +121,13 @@ export default function App() {
 
   // Modal lọc an toàn dựng inline ở đây (không phải component riêng) nên gắn
   // Escape-to-close tại App. Hai modal còn lại tự gọi hook trong file của chúng.
+  // Chọn mã từ bất kỳ panel nào. Trên điện thoại phải nhảy sang tab "Cổ phiếu": bấm
+  // một mã ở tab Thị trường mà màn hình không đổi gì thì người dùng tưởng nút hỏng.
+  const openStock = useCallback((symbol, name) => {
+    setSelectedStock({ symbol, name: name || symbol });
+    setMobileTab('stock');
+  }, []);
+
   const closeSafetyScreen = useCallback(() => setShowSafetyScreen(false), []);
   const closeFinder = useCallback(() => setShowFinder(false), []);
   useModalDismiss(showSafetyScreen, closeSafetyScreen);
@@ -445,7 +452,7 @@ export default function App() {
   <ErrorBoundary name="Bản tin sáng nay">
               <DailyBrief
                 apiBase={API_BASE}
-                onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
+                onSelectSymbol={openStock}
               />
             </ErrorBoundary>
           </div>
@@ -455,7 +462,7 @@ export default function App() {
               <VerdictScan
                 onOpenFinder={() => setShowFinder(true)}
                 apiBase={API_BASE}
-                onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
+                onSelectSymbol={openStock}
               />
             </ErrorBoundary>
           </div>
@@ -494,7 +501,7 @@ export default function App() {
                         className="search-result-row"
                         key={i} 
                         onClick={() => {
-                          setSelectedStock(stock);
+                          openStock(stock.symbol, stock.name);
                           setSearchQuery('');
                         }}
                       >
@@ -521,7 +528,7 @@ export default function App() {
                       <div 
                         key={i} 
                         className={`watchlist-item ${selectedStock.symbol === stock.symbol ? 'active' : ''}`}
-                        onClick={() => setSelectedStock(stock)}
+                        onClick={() => openStock(stock.symbol, stock.name)}
                       >
                         <span className="item-symbol font-display">{stock.symbol}</span>
                         <span className="item-name">{stock.name}</span>
@@ -666,7 +673,7 @@ export default function App() {
             apiBase={API_BASE}
             open={showSafetyScreen}
             onClose={closeSafetyScreen}
-            onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
+            onSelectSymbol={openStock}
           />
         ) : null}
 
@@ -675,7 +682,7 @@ export default function App() {
             apiBase={API_BASE}
             open={showFinder}
             onClose={closeFinder}
-            onSelectSymbol={(sym) => setSelectedStock({ symbol: sym, name: sym })}
+            onSelectSymbol={openStock}
           />
         ) : null}
 

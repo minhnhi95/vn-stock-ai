@@ -177,7 +177,12 @@ export default function MarketFinder({ apiBase, open, onClose, onSelectSymbol })
             </div>
 
             <label className="mf-check">
-              <input type="checkbox" checked={onlyBetter} onChange={(e) => setOnlyBetter(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={onlyBetter}
+                onChange={(e) => setOnlyBetter(e.target.checked)}
+                aria-label="Chỉ mã mà quy tắc từng đúng hơn chọn bừa"
+              />
               <span>Chỉ mã mà quy tắc từng đúng hơn chọn bừa</span>
             </label>
 
