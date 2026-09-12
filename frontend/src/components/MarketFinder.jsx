@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Search, RefreshCw } from 'lucide-react';
 import useModalDismiss from '../hooks/useModalDismiss';
 import VerdictRow from './VerdictRow';
-import { ROW_CSS, coverageText, fmtDay } from './verdictScanUtils';
+import { ROW_CSS, coverageText, fmtDay, scopeLabel } from './verdictScanUtils';
 
 /**
- * Tìm mã đáng mua toàn thị trường — lọc và sắp xếp lượt quét mới nhất.
+ * Tìm mã đáng mua — lọc và sắp xếp lượt quét mới nhất (mặc định job chỉ quét sàn HOSE).
  *
  * Chỉ ĐỌC kết quả job nền đã tính (GET /api/verdict/scan); không gọi vnstock nên mở ra
  * là lọc được ngay. Mặc định hiện mã "Có thể cân nhắc mua", mã mà quy tắc từng đúng
@@ -103,7 +103,7 @@ export default function MarketFinder({ apiBase, open, onClose, onSelectSymbol })
         <div className="mf-header">
           <div className="panel-title">
             <Search size={18} className="logo-icon" />
-            <span>Tìm mã đáng mua toàn thị trường</span>
+            <span>Tìm mã đáng mua trên {scopeLabel(data?.coverage)}</span>
           </div>
           <div className="mf-header-right">
             <button type="button" className="mf-icon-btn" onClick={load} disabled={loading} title="Tải lại">

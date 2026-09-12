@@ -34,13 +34,21 @@ export const edgeText = (row) => {
   return `${base} (đúng ${fmtPct(row.hit_ratio)}, chọn bừa ${fmtPct(row.baseline_hit_ratio)})`;
 };
 
+/** Phạm vi lượt quét, để tiêu đề nói đúng sàn đã tìm thay vì ghi cứng. */
+export const scopeLabel = (c) => {
+  if (!c) return 'cổ phiếu';
+  if (c.mode === 'vn100') return 'rổ VN100';
+  if (c.exchanges?.length) return `sàn ${c.exchanges.join(' + ')}`;
+  return 'toàn thị trường';
+};
+
 /** Một câu cho biết lượt quét phủ tới đâu — để "không có mã X" không bị hiểu nhầm là "X không đáng mua". */
 export const coverageText = (c) => {
   if (!c) return '';
   if (c.mode === 'vn100') return 'Lượt này chỉ chấm VN100 và mã bạn đang giữ hoặc đặt cảnh báo.';
   if (c.mode !== 'market') return '';
   if (!c.board_ok) {
-    return 'Không lấy được bảng giá toàn thị trường, nên lượt này chỉ chấm VN100 và mã bạn đang giữ hoặc đặt cảnh báo.';
+    return `Không lấy được bảng giá ${scopeLabel(c)}, nên lượt này chỉ chấm VN100 và mã bạn đang giữ hoặc đặt cảnh báo.`;
   }
   const reasons = [
     c.no_trade ? `${c.no_trade} mã không khớp lệnh` : null,
@@ -49,7 +57,7 @@ export const coverageText = (c) => {
     c.no_data || c.board_failed ? `${(c.no_data || 0) + (c.board_failed || 0)} mã không có bảng giá` : null,
   ].filter(Boolean);
   return (
-    `Lọc ${c.listed} cổ phiếu toàn thị trường: chấm ${c.priority} mã luôn được chấm (VN100, mã đang giữ, ` +
+    `Lọc ${c.listed} cổ phiếu trên ${scopeLabel(c)}: chấm ${c.priority} mã luôn được chấm (VN100, mã đang giữ, ` +
     `mã đặt cảnh báo) và ${c.prefilter_passed} mã khác đủ thanh khoản. ` +
     (reasons.length
       ? `Loại ${c.excluded} mã ở vòng lọc (${reasons.join(', ')}) — những mã này đằng nào cũng trượt bộ lọc an toàn.`

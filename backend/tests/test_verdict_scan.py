@@ -1,5 +1,5 @@
 """
-Job tìm mã đáng mua toàn thị trường (jobs/verdict_scan.py) và bảng lưu verdict_scan.
+Job tìm mã đáng mua trên sàn niêm yết (jobs/verdict_scan.py) và bảng lưu verdict_scan.
 
 Không gọi mạng: verdict_for, danh sách niêm yết, bảng giá, danh mục, VN100 và bản đồ
 ngành đều được thay bằng hàm giả. DB là SQLite tạm qua fixture temp_storage.
@@ -72,10 +72,10 @@ class TestChonMa:
         _stub_sources(vs, monkeypatch)
         assert vs.pick_universe([" fpt", "VNM", "FPT"])["symbols"] == ["FPT", "VNM"]
 
-    def test_toan_thi_truong_loc_roi_noi_sau_vn100(self, vs, monkeypatch):
+    def test_chi_tim_tren_san_duoc_chon_roi_noi_sau_vn100(self, vs, monkeypatch):
         _stub_sources(vs, monkeypatch)
-        listed = {s: "HOSE" for s in ("FPT", "HPG", "VNM", "ACB", "NOT")}
-        listed.update({"SHS": "HNX", "PVS": "HNX", "ABC": "UPCoM", "PEN": "HNX", "DEAD": "UPCoM", "LOST": "UPCoM"})
+        listed = {s: "HOSE" for s in ("FPT", "HPG", "VNM", "ACB", "NOT", "PVS", "ABC", "PEN", "DEAD", "LOST")}
+        listed.update({"SHS": "HNX"})  # ngoài sàn cần tìm
         board = {
             "FPT": {"price": 72_700.0, "value": 400e9},
             "HPG": {"price": 21_300.0, "value": 450e9},
@@ -92,22 +92,42 @@ class TestChonMa:
         monkeypatch.setattr(vs, "_price_board", lambda symbols: (seen.extend(symbols) or board, ["LOST"]))
 
         u = vs.pick_universe()
-        # VN100 trước, rồi mã khác qua vòng lọc, giao dịch nhiều trước.
-        assert u["symbols"] == ["FPT", "HPG", "VNM", "ACB", "PVS", "SHS"]
-        assert sorted(seen) == sorted(listed)  # bảng giá lấy cho cả sàn trong một lượt
+        # VN100 trước, rồi mã khác qua vòng lọc, giao dịch nhiều trước. SHS ở HNX nên
+        # không được tìm tới, dù đủ thanh khoản.
+        assert u["symbols"] == ["FPT", "HPG", "VNM", "ACB", "PVS"]
+        assert "SHS" not in seen  # không tốn bảng giá cho sàn không tìm
         c = u["coverage"]
-        assert c["mode"] == "market" and c["listed"] == 11 and c["priority"] == 4
-        assert c["prefilter_passed"] == 2 and c["excluded"] == 5
+        assert c["exchanges"] == ["HOSE"]
+        assert c["mode"] == "market" and c["listed"] == 10 and c["priority"] == 4
+        assert c["prefilter_passed"] == 1 and c["excluded"] == 5
         assert (c["illiquid"], c["penny"], c["no_trade"], c["no_data"], c["board_failed"]) == (1, 1, 1, 1, 1)
         assert c["board_ok"] is True
-        assert u["meta"]["SHS"] == {"exchange": "HNX", "value": 3e9, "in_vn100": False, "industry": "Dịch vụ tài chính"}
+        assert u["meta"]["PVS"] == {"exchange": "HOSE", "value": 200e9, "in_vn100": False, "industry": None}
         assert set(u["meta"]) == set(u["symbols"])
+
+    def test_ma_dang_giu_o_san_khac_van_duoc_cham(self, vs, monkeypatch):
+        _stub_sources(vs, monkeypatch, held=["SHS"])
+        monkeypatch.setattr(vs.storage, "list_alert_rules", lambda: [{"symbol": "PVS", "active": True}])
+        monkeypatch.setattr(vs, "_listed_stocks", lambda: {"FPT": "HOSE", "SHS": "HNX", "PVS": "UPCoM"})
+        monkeypatch.setattr(vs, "_price_board", lambda symbols: ({s: {"price": 20_000.0, "value": 50e9} for s in symbols}, []))
+        u = vs.pick_universe()
+        assert u["symbols"][:2] == ["SHS", "PVS"]
+        assert u["meta"]["SHS"]["exchange"] == "HNX"
+
+    def test_chon_them_san_khac(self, vs, monkeypatch):
+        _stub_sources(vs, monkeypatch, vn100=())
+        monkeypatch.setattr(vs, "_listed_stocks", lambda: {"SHS": "HNX", "ABC": "UPCoM"})
+        monkeypatch.setattr(vs, "_price_board", lambda symbols: ({s: {"price": 20_000.0, "value": 50e9} for s in symbols}, []))
+        u = vs.pick_universe(exchanges=("HOSE", "HNX"))
+        assert u["symbols"] == ["SHS"]
+        assert u["coverage"]["exchanges"] == ["HOSE", "HNX"]
 
     def test_bang_gia_hong_ca_san_thi_van_cham_vn100(self, vs, monkeypatch):
         _stub_sources(vs, monkeypatch)
-        monkeypatch.setattr(vs, "_listed_stocks", lambda: {"FPT": "HOSE", "SHS": "HNX"})
+        monkeypatch.setattr(vs, "_listed_stocks", lambda: {"FPT": "HOSE", "XYZ": "HOSE"})
         monkeypatch.setattr(vs, "_price_board", lambda symbols: ({}, list(symbols)))
         u = vs.pick_universe()
+        # Không lọc được mã nào ngoài VN100, nhưng VN100 vẫn được chấm bình thường.
         assert u["symbols"] == ["FPT", "HPG", "VNM", "ACB"]
         assert u["coverage"]["board_ok"] is False and u["coverage"]["board_failed"] == 1
 
@@ -261,8 +281,8 @@ class TestChayJob:
         """Job với rổ 4 mã và kết quả giả; ngày quét cố định."""
         picks = []
 
-        def fake_pick(explicit=None, market=True):
-            picks.append(market)
+        def fake_pick(explicit=None, market=True, exchanges=("HOSE",)):
+            picks.append((market, tuple(exchanges)))
             return {
                 "symbols": list(explicit) if explicit else ["FPT", "HPG", "VNM", "ACB"],
                 "held": ["FPT"],
@@ -292,7 +312,7 @@ class TestChayJob:
     def test_luot_toan_thi_truong_duoc_ghi(self, job, monkeypatch):
         self._stub_scan(job, monkeypatch)
         assert job.main([]) == 0
-        assert job.picks == [True]
+        assert job.picks == [(True, ("HOSE",))]
         saved = job.storage.get_verdict_scan("2026-09-11")
         assert saved["counts"]["buy_consider"] == 4
         assert saved["coverage"] == {"mode": "market"}
@@ -302,7 +322,12 @@ class TestChayJob:
     def test_chon_chi_vn100(self, job, monkeypatch):
         self._stub_scan(job, monkeypatch)
         assert job.main(["--universe", "vn100"]) == 0
-        assert job.picks == [False]
+        assert job.picks == [(False, ("HOSE",))]
+
+    def test_chon_them_san(self, job, monkeypatch):
+        self._stub_scan(job, monkeypatch)
+        assert job.main(["--exchanges", "HOSE", "HNX"]) == 0
+        assert job.picks == [(True, ("HOSE", "HNX"))]
 
     def test_luot_quet_thu_khong_ghi(self, job, monkeypatch):
         self._stub_scan(job, monkeypatch)

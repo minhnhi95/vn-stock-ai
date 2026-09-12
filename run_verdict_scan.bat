@@ -1,7 +1,7 @@
 @echo off
 REM ===================================================================
 REM  Tu quet ket luan "Co the can nhac mua / Cho them / Khong nen mua"
-REM  cho toan thi truong: loc thanh khoan ca san truoc, roi cham tung ma
+REM  tren san HOSE: loc thanh khoan ca san truoc, roi cham tung ma
 REM  (VN100 + ma dang giu + ma dat canh bao luon duoc cham).
 REM
 REM  Ket qua ghi vao DB (bang verdict_scan), hien o panel "Ket luan ca ro"
@@ -10,7 +10,7 @@ REM
 REM  Da dat lich tu dong trong Task Scheduler: "VN Stock - Quet ket luan",
 REM  15:30 thu 2 den thu 6 (sau gio dong cua, dung gia dong cua phien do).
 REM
-REM  Mat khoang 40 phut: vnstock free tier chi cho 20 request/phut nen
+REM  Mat khoang 25 phut: vnstock free tier chi cho 20 request/phut nen
 REM  moi ma cach nhau 9 giay. Luot quet hong (mat mang, qua nua so ma
 REM  loi) se KHONG ghi de luot quet cu.
 REM ===================================================================

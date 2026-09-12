@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ListChecks, RefreshCw, ChevronDown, ChevronRight, ArrowRight, Search } from 'lucide-react';
 import VerdictRow from './VerdictRow';
-import { ROW_CSS, VERDICT_CLASS, coverageText, fmtDay } from './verdictScanUtils';
+import { ROW_CSS, VERDICT_CLASS, coverageText, fmtDay, scopeLabel } from './verdictScanUtils';
 
 /**
- * Tóm tắt lượt quét toàn thị trường — chỉ ĐỌC từ DB.
+ * Tóm tắt lượt quét gần nhất — chỉ ĐỌC từ DB.
  *
  * Job nền (jobs/verdict_scan.py) lọc thanh khoản cả sàn rồi chấm kết luận từng mã mỗi
  * ngày giao dịch sau giờ đóng cửa, bằng đúng quy tắc của thẻ "Kết luận". Panel chỉ
@@ -58,13 +58,14 @@ export default function VerdictScan({ apiBase, onSelectSymbol, onOpenFinder }) {
   const errors = Array.isArray(data?.errors) ? data.errors : [];
   const counts = data?.counts || {};
   const coverage = coverageText(data?.coverage);
+  const scope = data?.available ? scopeLabel(data.coverage) : 'cổ phiếu';
 
   return (
     <div className="glass-panel">
       <div className="panel-header">
         <div className="panel-title">
           <ListChecks size={16} className="text-accent" />
-          <span>Kết luận toàn thị trường</span>
+          <span>Kết luận {scope}</span>
         </div>
         <div className="vs-header-right">
           {data?.available ? <span className="vs-stamp">Phiên {fmtDay(data.scan_date || data.date)}</span> : null}

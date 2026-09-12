@@ -1,14 +1,13 @@
 """
-Tìm mã đáng mua toàn thị trường: chấm kết luận "Có thể cân nhắc mua / Chờ thêm / Không
+Tìm mã đáng mua trên sàn HOSE: chấm kết luận "Có thể cân nhắc mua / Chờ thêm / Không
 nên mua" rồi ghi vào DB.
 
 Hai vòng, vì vnstock free tier chỉ cho 20 request/phút:
 
-1. Lọc rẻ. Lấy danh sách mọi cổ phiếu đang niêm yết (HOSE, HNX, UPCoM) và bảng giá
-   phiên gần nhất. Bảng giá nhận 80 mã mỗi request nên cả sàn chỉ tốn khoảng 25
-   request (~2 phút). Loại mã không khớp lệnh, giá dưới ngưỡng, hoặc giao dịch quá
-   ít: những mã này đằng nào cũng trượt bộ lọc an toàn, tức là "Không nên mua".
-   Chấm đủ ~1.500 mã sẽ mất gần 4 tiếng; sau vòng lọc còn khoảng 100 mã ngoài VN100.
+1. Lọc rẻ. Lấy danh sách cổ phiếu đang niêm yết trên sàn cần tìm và bảng giá phiên
+   gần nhất. Bảng giá nhận 80 mã mỗi request nên cả sàn chỉ tốn vài request (~1 phút).
+   Loại mã không khớp lệnh, giá dưới ngưỡng, hoặc giao dịch quá ít: những mã này đằng
+   nào cũng trượt bộ lọc an toàn, tức là "Không nên mua".
 2. Chấm kết luận. Chạy verdict_engine đầy đủ cho mã qua vòng lọc, cộng mã đang giữ,
    mã đang đặt cảnh báo và rổ VN100 — nhóm này luôn được chấm, không qua vòng lọc.
 
@@ -18,7 +17,8 @@ Kết luận từng mã lấy từ verdict_engine — cùng quy tắc với th�
 diện, nên danh sách và thẻ không bao giờ nói hai điều khác nhau.
 
 Chạy (từ thư mục backend):
-    python -m jobs.verdict_scan                    # toàn thị trường, ghi vào DB (~40 phút)
+    python -m jobs.verdict_scan                    # sàn HOSE, ghi vào DB
+    python -m jobs.verdict_scan --exchanges HOSE HNX UPCoM   # thêm sàn khác
     python -m jobs.verdict_scan --universe vn100   # chỉ VN100 + mã quan tâm (~15 phút)
     python -m jobs.verdict_scan --dry-run          # quét nhưng không ghi
     python -m jobs.verdict_scan --symbols FPT VNM  # vài mã, chỉ in
@@ -75,6 +75,10 @@ _VERDICT_ORDER = {"buy_consider": 0, "wait": 1, "avoid": 2}
 _EDGE_ORDER = {"better": 0, "same": 1, None: 2, "worse": 3}
 
 _EXCHANGE_NAMES = {"HSX": "HOSE", "HOSE": "HOSE", "HNX": "HNX", "UPCOM": "UPCoM"}
+
+# Mặc định chỉ tìm trên HOSE: sàn lớn nhất, chuẩn niêm yết và công bố thông tin chặt
+# nhất. Mã đang giữ hoặc đang đặt cảnh báo vẫn luôn được chấm dù nằm ở sàn nào.
+DEFAULT_EXCHANGES = ("HOSE",)
 
 
 def _dedupe(symbols: Iterable[str]) -> List[str]:
@@ -193,7 +197,11 @@ def prefilter(
     return passed, stats
 
 
-def pick_universe(explicit: Optional[List[str]] = None, market: bool = True) -> Dict[str, Any]:
+def pick_universe(
+    explicit: Optional[List[str]] = None,
+    market: bool = True,
+    exchanges: Iterable[str] = DEFAULT_EXCHANGES,
+) -> Dict[str, Any]:
     """
     Mã cần chấm, theo thứ tự ưu tiên: mã đang giữ → mã đặt cảnh báo → VN100 → mã khác
     qua vòng lọc (giao dịch nhiều trước). Job bị ngắt giữa chừng thì mã quan trọng
@@ -236,16 +244,20 @@ def pick_universe(explicit: Optional[List[str]] = None, market: bool = True) -> 
         symbols = list(priority)
 
         if market:
+            wanted = tuple(exchanges)
             listed = _listed_stocks()
-            everything = sorted(set(listed) | set(priority))
-            print(f"Loc thanh khoan {len(everything)} ma toan thi truong...")
-            board, failed = _price_board(everything)
+            # Mã ngoài sàn cần tìm chỉ được chấm nếu đang giữ hoặc đang đặt cảnh báo.
+            in_scope = [s for s, exchange in listed.items() if exchange in wanted]
             priority_set = set(priority)
-            rest = [s for s in sorted(listed) if s not in priority_set]
+            everything = sorted(set(in_scope) | priority_set)
+            print(f"Loc thanh khoan {len(everything)} ma tren {', '.join(wanted)}...")
+            board, failed = _price_board(everything)
+            rest = [s for s in sorted(in_scope) if s not in priority_set]
             passed, stats = prefilter(rest, board, failed)
             symbols += passed
             coverage = {
                 "mode": "market",
+                "exchanges": list(wanted),
                 "listed": len(everything),
                 "priority": len(priority),
                 "prefilter_passed": len(passed),
@@ -425,12 +437,19 @@ def _today() -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Tim ma dang mua toan thi truong")
+    parser = argparse.ArgumentParser(description="Tim ma dang mua tren san niem yet")
     parser.add_argument(
         "--universe",
         choices=("market", "vn100"),
         default="market",
         help="market = loc ca san roi cham (mac dinh); vn100 = chi VN100 + ma quan tam",
+    )
+    parser.add_argument(
+        "--exchanges",
+        nargs="+",
+        choices=("HOSE", "HNX", "UPCoM"),
+        default=list(DEFAULT_EXCHANGES),
+        help="San can tim (mac dinh HOSE). Ma dang giu / dat canh bao luon duoc cham.",
     )
     parser.add_argument("--symbols", nargs="+", help="Chi quet cac ma nay (chi in, khong ghi)")
     parser.add_argument("--limit", type=int, default=0, help="Chi quet N ma dau (chi in, khong ghi)")
@@ -438,7 +457,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--throttle", type=float, default=THROTTLE_SECONDS)
     args = parser.parse_args(argv)
 
-    universe = pick_universe(args.symbols, market=args.universe == "market")
+    universe = pick_universe(
+        args.symbols, market=args.universe == "market", exchanges=tuple(args.exchanges)
+    )
     symbols = universe["symbols"][: args.limit] if args.limit else universe["symbols"]
     partial = bool(args.symbols or args.limit)
     print(
