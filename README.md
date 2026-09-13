@@ -154,6 +154,7 @@ cd frontend && npm run lint
 | --- | --- |
 | Biểu đồ | 3 khung đồng bộ: nến + EMA20/50/200 + khối lượng, RSI(14) có mốc 30/70, MACD; crosshair chung, ô đọc OHLC theo con trỏ; giá cập nhật 5s trong phiên |
 | **Kết luận mua / không mua** | "Có thể cân nhắc mua / Chờ thêm / Không nên mua" cho mã đang xem, và **tìm mã đáng mua trên sàn HOSE** mỗi ngày giao dịch (lọc thanh khoản cả sàn rồi chấm từng mã, lọc theo ngành), từ quy tắc công khai: an toàn, xu hướng (EMA50/EMA200, RSI), định giá và sinh lời so với ngành. Kèm từng tiêu chí đạt/trượt và tỷ lệ quy tắc từng đúng 20 phiên sau trong 2 năm qua, so với mọi phiên |
+| **Tài chính cá nhân** | Nhập tiền mặt, tiết kiệm, nợ, chi tiêu → tài sản ròng, phân bổ, quỹ dự phòng đủ bao nhiêu tháng, cổ phiếu và mã lớn nhất chiếm bao nhiêu phần tổng tài sản, và cùng số tiền đó nếu gửi tiết kiệm (tính theo từng lô) thì được bao nhiêu |
 | **Kế hoạch vào lệnh** | Vốn và mức rủi ro chấp nhận cho mỗi lệnh → số cổ phiếu nên mua, giá cắt lỗ theo ATR14 / đáy 20 phiên (đúng bước giá sàn), tiền mất tối đa đã gồm phí và thuế, mục tiêu chốt lời gấp đôi khoảng cách cắt lỗ |
 | **Kiểm tra an toàn** | 6 tiêu chí ngưỡng cứng (thanh khoản, thị giá, nợ/vốn chủ, ROE, biên độ, rổ VN100). Chỉ chặn mã rủi ro, **không** gợi ý mã tốt. Quét được nhiều mã một lượt |
 | **Cơ bản có giải thích** | 13 chỉ số, mỗi chỉ số kèm một câu tiếng Việt đời thường ("Bạn trả 15,53 đồng để mua 1 đồng lợi nhuận mỗi năm"), trung vị cùng ngành để đối chiếu, và trường hợp con số đó đánh lừa |
@@ -268,6 +269,29 @@ cd backend
 Cảnh báo **"Kết luận: Có thể cân nhắc mua"** / **"Kết luận: Không nên mua"** đọc lượt
 quét mới nhất nên không tốn request nào. Lượt quét cũ hơn 4 ngày bị bỏ qua: máy tắt cả
 tuần thì cảnh báo không bắn một kết luận cũ như thể của hôm nay.
+
+## Tài chính cá nhân
+
+Đầu tư an toàn bắt đầu từ việc biết tiền đang nằm ở đâu, trước cả chuyện chọn mã. Người
+mới hay dồn hết vào cổ phiếu mà không giữ quỹ dự phòng, nên một khoản chi bất ngờ đúng
+lúc thị trường giảm là phải bán, biến lỗ tạm thời thành lỗ thật.
+
+Panel **Tài chính cá nhân** ở tab Danh mục: người dùng nhập tiền mặt, tiết kiệm (kèm lãi
+suất), tiền trong tài khoản chứng khoán, tài sản khác, nợ và chi tiêu mỗi tháng; phần cổ
+phiếu lấy từ danh mục thật. `personal_finance_service.py` tính tài sản ròng, phân bổ, và
+bốn kiểm tra với ngưỡng công khai ở đầu file:
+
+| Kiểm tra | Đạt | Cần chú ý | Vượt ngưỡng |
+|---|---|---|---|
+| Quỹ dự phòng (tiền mặt + tiết kiệm) | ≥ 6 tháng chi tiêu | 3–6 tháng | < 3 tháng |
+| Cổ phiếu trên tổng tài sản | ≤ 50% | ≤ 70% | > 70% |
+| Mã lớn nhất trên tổng tài sản | ≤ 20% | ≤ 35% | > 35% |
+| Nợ trên tổng tài sản | ≤ 30% | ≤ 50% | > 50% |
+
+Thiếu dữ liệu thì kiểm tra ghi "chưa biết" chứ không bao giờ "đạt": chưa nhập tiền mặt thì
+tỷ lệ cổ phiếu trên tổng tài sản sẽ luôn là 100% và vô nghĩa. Kèm theo là phép so sánh:
+cùng số tiền đã bỏ vào cổ phiếu, nếu gửi tiết kiệm từ ngày mua của từng lô thì đến nay
+lãi bao nhiêu. Số liệu nằm trong bảng `personal_finance` của database cục bộ.
 
 ## Kế hoạch vào lệnh
 
@@ -402,6 +426,7 @@ backend/
   safety_screen.py            # 6 tiêu chí ngưỡng cứng chặn mã rủi ro cho người mới
   verdict_engine.py           # kết luận mua/chờ/không mua từ quy tắc + tỷ lệ đúng quá khứ
   trade_plan.py               # mua bao nhiêu cp, cắt lỗ ở đâu, mất tối đa bao nhiêu
+  personal_finance_service.py # tài sản ròng, phân bổ, quỹ dự phòng, kiểm tra an toàn
   metric_explainer.py         # dịch chỉ số cơ bản sang tiếng Việt + so trung vị ngành
   market_universe.py          # rổ VN30/VN100 tĩnh làm fallback
   symbol_utils.py             # nhận dạng mã CK VN (nguồn sự thật duy nhất)

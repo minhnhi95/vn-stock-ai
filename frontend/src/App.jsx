@@ -14,6 +14,7 @@ import MarketPanel from './components/MarketPanel';
 import DailyBrief from './components/DailyBrief';
 import VerdictCard from './components/VerdictCard';
 import TradePlan from './components/TradePlan';
+import PersonalFinance from './components/PersonalFinance';
 import VerdictScan from './components/VerdictScan';
 const SafetyScreenModal = lazy(() => import('./components/SafetyScreenModal'));
 const MarketFinder = lazy(() => import('./components/MarketFinder'));
@@ -613,6 +614,12 @@ export default function App() {
                 )}
               </div>
             </div>
+          </div>
+
+          <div className="panel-slot" data-tab="portfolio">
+            <ErrorBoundary name="Tài chính cá nhân">
+              <PersonalFinance apiBase={API_BASE} />
+            </ErrorBoundary>
           </div>
 
           <div className="panel-slot" data-tab="portfolio">

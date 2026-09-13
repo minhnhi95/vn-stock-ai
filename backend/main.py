@@ -81,6 +81,13 @@ except Exception as _e:
     _PLAN_OK = False
 
 try:
+    from personal_finance_service import FinanceInputError, finance_for, save_and_compute
+    _FINANCE_OK = True
+except Exception as _e:
+    print(f"[finance] unavailable: {_e}")
+    _FINANCE_OK = False
+
+try:
     from alerts_service import (
         create_alert,
         list_alerts,
@@ -227,6 +234,7 @@ def health():
             "safety_screen": _SAFETY_OK,
             "verdict": _VERDICT_OK,
             "trade_plan": _PLAN_OK,
+            "personal_finance": _FINANCE_OK,
         },
     }
 
@@ -878,6 +886,25 @@ if _REAL_OK:
 
 class SafetyScreenRequest(BaseModel):
     symbols: Optional[List[str]] = None
+
+
+if _FINANCE_OK:
+    @app.get("/api/finance")
+    def api_finance():
+        """Tổng tài sản, phân bổ và kiểm tra an toàn — xem personal_finance_service."""
+        try:
+            return finance_for()
+        except (SystemExit, Exception) as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi tính tài chính: {str(e)[:200]}")
+
+    @app.put("/api/finance")
+    def api_finance_save(payload: Dict[str, Optional[str | float]]):
+        try:
+            return save_and_compute(payload)
+        except FinanceInputError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except (SystemExit, Exception) as e:
+            raise HTTPException(status_code=500, detail=f"Lỗi lưu tài chính: {str(e)[:200]}")
 
 
 if _PLAN_OK:

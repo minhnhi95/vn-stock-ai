@@ -156,6 +156,11 @@ CREATE TABLE IF NOT EXISTS verdict_scan (
     payload TEXT NOT NULL,
     generated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS personal_finance (
+    id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 """
 
 SCHEMA_PG = """
@@ -194,6 +199,11 @@ CREATE TABLE IF NOT EXISTS verdict_scan (
     scan_date TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
     generated_at BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS personal_finance (
+    id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    updated_at BIGINT NOT NULL
 );
 """
 
@@ -572,3 +582,41 @@ def list_verdict_scan_dates(limit: int = 30) -> List[str]:
             (limit,),
         )
     return [_row_get(r, "scan_date") for r in rows]
+
+
+# ---------- Tài chính cá nhân ----------
+# Một dòng duy nhất: tiền mặt, tiết kiệm, chi tiêu... người dùng tự nhập. App dành cho
+# một người nên không cần khoá theo user.
+
+_FINANCE_ID = "default"
+
+
+def save_personal_finance(payload: Dict[str, Any]) -> None:
+    _init_schema_once()
+    with _conn() as con:
+        _begin(con)
+        _execute(
+            con,
+            "INSERT INTO personal_finance(id, payload, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at",
+            (_FINANCE_ID, json.dumps(payload, ensure_ascii=False), int(time.time())),
+        )
+        _commit(con)
+
+
+def get_personal_finance() -> Optional[Dict[str, Any]]:
+    _init_schema_once()
+    with _conn() as con:
+        row = _fetchone(
+            con,
+            "SELECT payload, updated_at FROM personal_finance WHERE id = ?",
+            (_FINANCE_ID,),
+        )
+    if not row:
+        return None
+    try:
+        payload = json.loads(_row_get(row, "payload"))
+    except (TypeError, ValueError):
+        return None
+    payload["updated_at"] = _row_get(row, "updated_at")
+    return payload
