@@ -236,16 +236,35 @@ def _read_rows(content: bytes, filename: str = "") -> List[List[str]]:
     return rows
 
 
-def _find_header_row(rows: List[List[str]]) -> int:
+def _merge_header_rows(first: List[str], second: List[str]) -> List[str]:
+    """Ghép hai dòng tiêu đề theo từng cột: "" + "KL khớp" -> "KL khớp"."""
+    width = max(len(first), len(second))
+    merged = []
+    for i in range(width):
+        parts = [(first[i] if i < len(first) else "").strip(), (second[i] if i < len(second) else "").strip()]
+        merged.append(" ".join(p for p in parts if p))
+    return merged
+
+
+def _resolve_header(rows: List[List[str]]) -> Tuple[List[str], int]:
     """
-    Sao kê thường có vài dòng tiêu đề/logo trước bảng thật. Dòng header là dòng
-    đầu tiên nhận ra được cả cột mã lẫn cột khối lượng.
+    Tìm dòng tiêu đề và dòng dữ liệu đầu tiên. Trả (headers, data_start_idx).
+
+    Sao kê thường có vài dòng logo/tên công ty trước bảng thật. Ngoài ra OCBS (và
+    nhiều công ty khác) dùng tiêu đề HAI dòng: dòng trên là ô gộp "Thông tin giao
+    dịch chi tiết", dòng dưới mới là "KL khớp", "Giá khớp". Chỉ đọc một dòng thì
+    không bao giờ thấy đủ cột bắt buộc, nên thử ghép với dòng kế tiếp.
     """
     for idx, row in enumerate(rows[:25]):
         detected = _detect_columns(row)
         if detected["symbol"] is not None and detected["quantity"] is not None:
-            return idx
-    return 0
+            return row, idx + 1
+        if idx + 1 < len(rows):
+            merged = _merge_header_rows(row, rows[idx + 1])
+            detected = _detect_columns(merged)
+            if detected["symbol"] is not None and detected["quantity"] is not None:
+                return merged, idx + 2
+    return rows[0], 1
 
 
 def parse_broker_csv(
@@ -260,8 +279,7 @@ def parse_broker_csv(
     file không tách riêng, vì đó là mức luật định, không phụ thuộc công ty.
     """
     rows = _read_rows(content, filename)
-    header_idx = _find_header_row(rows)
-    headers = rows[header_idx]
+    headers, data_start = _resolve_header(rows)
     columns = _detect_columns(headers)
 
     missing = [f for f in ("date", "symbol", "quantity", "price") if columns[f] is None]
@@ -282,7 +300,7 @@ def parse_broker_csv(
     records: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
 
-    for line_no, row in enumerate(rows[header_idx + 1:], start=header_idx + 2):
+    for line_no, row in enumerate(rows[data_start:], start=data_start + 1):
         date = _parse_date(cell(row, "date"))
         symbol = _fold(cell(row, "symbol")).upper().strip()
         quantity = _parse_number(cell(row, "quantity"))

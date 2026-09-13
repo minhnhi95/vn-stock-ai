@@ -250,3 +250,52 @@ class TestFileExcel:
     def test_file_xls_doi_cu_bao_ro(self):
         with pytest.raises(ImportError_, match="xls"):
             parse_broker_csv(b"rac", filename="saoke.xls")
+
+
+class TestTieuDeHaiDong:
+    """
+    Sao kê OCBS có tiêu đề HAI dòng: dòng trên là ô gộp "Thông tin giao dịch chi tiết",
+    dòng dưới mới là "KL khớp"/"Giá khớp". Đọc một dòng thì không thấy đủ cột bắt buộc.
+    """
+
+    def _xlsx(self):
+        import io as _io
+
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["", "", "", "", "", "", "", "", "CÔNG TY CỔ PHẦN CHỨNG KHOÁN OCBS"])
+        ws.append(["LỊCH SỬ ĐẶT LỆNH"])
+        ws.append(["", "", "", "", "", "", "Từ ngày:", "27/02/2026", "đến ngày", "14/09/2026"])
+        ws.append(["", "", "", "", "Số tài khoản:", "020C000000"])
+        ws.append([])
+        ws.append(["", "Số hiệu lệnh", "Ngày", "Giờ đặt", "Mã CK", "Loại GD", "Loại lệnh",
+                   "Thông tin giao dịch chi tiết", "", "", "", "", "Trạng thái", "Phí", "Thuế", "Kênh đặt lệnh"])
+        ws.append(["", "", "", "", "", "", "", "KL đặt", "Giá đặt", "KL khớp", "Giá khớp", "GT khớp"])
+        ws.append(["", "373", "15/05/2026", "09:16:28", "NTL", "Mua", "LO", "0", "16,000", "0", "0", "0",
+                   "Đã hủy", "0", "0", "OCBS Invest - iOS"])
+        ws.append(["", "908", "10/03/2026", "09:22:39", "FPT", "Mua", "LO", "500", "78,600", "500", "78600",
+                   "39300000", "Khớp hết", "58,950", "0", "OCBS Invest - iOS"])
+        ws.append(["", "909", "11/03/2026", "10:05:01", "HPG", "Bán", "LO", "1000", "21,300", "1000", "21300",
+                   "21300000", "Khớp hết", "31,950", "21,300", "OCBS Invest - Web"])
+        buf = _io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def test_doc_dung_cot_khop_lenh_khong_phai_cot_dat(self):
+        result = parse_broker_csv(self._xlsx(), filename="lich_su_lenh.xlsx")
+        assert result["detected_columns"]["quantity"] == "KL khớp"
+        assert result["detected_columns"]["price"] == "Giá khớp"
+
+        rows = result["records"]
+        assert [r["symbol"] for r in rows] == ["FPT", "HPG"]
+        assert rows[0]["date"] == "2026-03-10" and rows[0]["quantity"] == 500
+        assert rows[0]["price"] == 78_600.0 and rows[0]["fee"] == 58_950.0
+        assert rows[1]["side"] == "SELL" and rows[1]["tax"] == 21_300.0
+
+    def test_lenh_da_huy_bi_bo_qua_kem_ly_do(self):
+        result = parse_broker_csv(self._xlsx(), filename="lich_su_lenh.xlsx")
+        assert len(result["skipped"]) == 1
+        skipped = result["skipped"][0]
+        assert "NTL" in skipped["raw"] and "khối lượng" in skipped["reason"]
